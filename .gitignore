@@ -1,0 +1,14 @@
+# envs / caches
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# generated scene + training outputs
+assets_gen/
+runs/
+runs_*.log
+
+# scratch
+*.tmp
+.DS_Store
