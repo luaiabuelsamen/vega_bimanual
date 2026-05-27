@@ -76,7 +76,7 @@ RESIDUAL_SCALE = 0.05
 # The residual may only nudge the kinematic reference within this band — it
 # cannot accumulate into a drift that walks the arms to their limits (which an
 # unbounded residual did on the bimanual lift). DexTrack similarly bounds it.
-RESIDUAL_CLIP = 0.30
+RESIDUAL_CLIP = 0.12
 
 # Home posture (radians / metres) for frozen joints; arms start at reference.
 # NOTE: Lift is 0.0, not 0.1 — the torso-lift position actuator (POSTURE_KP)
