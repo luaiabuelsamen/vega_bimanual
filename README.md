@@ -9,11 +9,13 @@
   <img src="media/bim_lift.gif" width="520" alt="Two Vega f5d6 hands cooperatively lifting a box off the table"/>
 </p>
 
-*Above: a bimanual cooperative squeeze-and-lift reference — the two f5d6 hands press
-opposite faces of a box and lift it off the table together. This is the one
-manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the fingers
-closer than ~3.1 cm); the second hand provides the missing object opposition. It's
-the bimanual analogue of what DexTrack tracks.*
+*Above: a bimanual cooperative squeeze-and-lift, executed **open-loop in full
+physics** (no kinematic locking) — the two f5d6 hands press opposite faces of a
+box and lift it ~21 cm off the table, held purely by inter-hand friction. This is
+the one manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the
+fingers closer than ~3.1 cm); the second hand provides the missing object
+opposition. f5d6's weak opposition caps the liftable mass — the squeeze holds a
+0.05 kg box but slips on 0.12 kg.*
 
 <p align="center">
   <img src="media/reorient.gif" width="360" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
@@ -37,9 +39,10 @@ manipulation.
 
 - **Env** (`dextrack_vega/envs`): per-arm-modular tracking env. Action space is
   DexTrack's **cumulative residual position targets with a kinematic bias**
-  (`target = ref_qpos + Σ residual`), so the policy stays anchored to the
-  reference while applying the corrections that make the motion dynamically
-  feasible. Reward = object-pose + hand-pose (joint & fingertip) tracking, all
+  (`target = ref_qpos + Σ residual`, the residual **bounded** to a band around
+  the reference so the policy corrects it but can't drift away — an unbounded
+  residual let the bimanual arms walk to their joint limits). Reward =
+  object-pose + hand-pose (joint & fingertip) tracking, all
   bounded exponential kernels. Now generalizes from one arm (`side="R"`, 18-DoF
   action) to **two** (`sides=["R","L"]`, 36-DoF).
 - **Assets** (`dextrack_vega/assets.py`): compiles the Vega-1U f5d6 URDF into a
@@ -49,8 +52,11 @@ manipulation.
 - **References** (`scripts/make_demo.py`): physically-consistent demos generated
   in-sim via damped-least-squares IK (incl. a verified 6-DoF position+orientation
   IK) — `push`, `reorient`, plus a kinematic `lift_ref` builder.
-- **Learning** (`scripts/train.py`): clean PPO (PyTorch), in-process vectorized
-  envs.
+- **Learning** (`scripts/train.py`): clean PPO (PyTorch). Vectorized envs come in
+  two backends (`dextrack_vega/envs/vec_env.py`): `sync` (in-process) and
+  `process` (one env per core). On this 8-core Jetson the multi-core backend is
+  ~2.8× faster (130 → ~366 steps/s); MJX isn't an option here (no JAX-CUDA wheels
+  for aarch64/Tegra), so `mujoco_warp` is the eventual GPU path.
 
 ## Status
 
@@ -61,8 +67,9 @@ manipulation.
 | **Reorient** task (object yaw tracking) | ✅ demo + training |
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
-| **Bimanual squeeze-and-lift** reference (cooperative) | ✅ demo (kinematic target) |
-| Bimanual cooperative *training* | 🚧 next |
+| **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
+| Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
+| Bimanual *RL tracker* matching the open-loop lift | 🚧 partial (policy lifts ~4 cm; tuning residual bound / grip reward) |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
 | Parallel sim (mujoco_warp) for throughput | 🚧 |
 
@@ -83,8 +90,16 @@ PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_bo
 
 # generate the bimanual cooperative squeeze-and-lift reference (36-DoF, two arms)
 PYTHONPATH=. python scripts/make_demo.py --task bim_lift --out demos/bim_lift_box.npz
+# render it executed OPEN-LOOP in physics (real dynamics; prints the net lift)
 MUJOCO_GL=egl PYTHONPATH=. python scripts/render_gif.py \
-    --ref demos/bim_lift_box.npz --sides R,L --out media/bim_lift.gif
+    --ref demos/bim_lift_box.npz --sides R,L --openloop \
+    --obj-type box --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 --obj-pos 0.55,0.0,0.80 \
+    --out media/bim_lift.gif
+
+# train the bimanual tracker across all CPU cores (object must match the ref)
+PYTHONPATH=. python scripts/train.py --ref demos/bim_lift_box.npz --sides R,L \
+    --vec process --num-envs 12 --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \
+    --obj-pos 0.55,0.0,0.80 --total-steps 800000
 
 # train the tracker on it
 PYTHONPATH=. python scripts/train.py --ref demos/reorient_box.npz --total-steps 250000

@@ -527,9 +527,14 @@ POLE = dict(obj_type="cylinder", obj_dims=(0.016, 0.07), obj_pos=(0.55, -0.15, 0
             obj_mass=0.05)
 
 # Bimanual box preset: centred on the robot midline (y=0) so both arms reach it
-# symmetrically, sized so the two palms have a face to press (8x9x14 cm).
+# symmetrically, sized so the two palms have a face to press (8x9x14 cm). Mass is
+# 0.05kg (a light package): at the heavier 0.12kg the inter-hand friction squeeze
+# can't hold the box (open-loop ref playback lifts it only ~6cm then drops it),
+# whereas at 0.05kg the squeeze physically lifts and holds it (+21cm open-loop) —
+# i.e. the tracking target is physically realizable, which it must be for the RL
+# tracker to have any chance. f5d6's weak opposition caps the liftable mass.
 BIM_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07), obj_pos=(0.55, 0.0, 0.80),
-               obj_mass=0.12)
+               obj_mass=0.05)
 
 
 def main():

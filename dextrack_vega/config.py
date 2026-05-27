@@ -72,6 +72,11 @@ CONTROL_DECIMATION = 4  # policy acts at 50 Hz when SIM_DT=0.005
 # kinematic bias. Per-step residual is bounded to this fraction of each joint
 # range so the policy nudges the kinematic reference rather than overriding it.
 RESIDUAL_SCALE = 0.05
+# Hard cap on the *cumulative* residual, as a fraction of each joint's range.
+# The residual may only nudge the kinematic reference within this band — it
+# cannot accumulate into a drift that walks the arms to their limits (which an
+# unbounded residual did on the bimanual lift). DexTrack similarly bounds it.
+RESIDUAL_CLIP = 0.30
 
 # Home posture (radians / metres) for frozen joints; arms start at reference.
 # NOTE: Lift is 0.0, not 0.1 — the torso-lift position actuator (POSTURE_KP)

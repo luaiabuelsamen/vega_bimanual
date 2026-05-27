@@ -160,8 +160,16 @@ class VegaTrackingEnv:
 
     def step(self, action: np.ndarray):
         action = np.clip(np.asarray(action, np.float64), -1.0, 1.0)
-        # cumulative residual position target with kinematic bias
-        self._cum_residual += action * C.RESIDUAL_SCALE * self._jnt_span
+        # cumulative residual position target with kinematic bias. The residual
+        # is CLAMPED to a fraction of each joint's span so it can only *correct*
+        # the reference, never drift away from it: an unbounded cumulative
+        # residual let the bimanual policy walk the arms to their joint limits
+        # (hands ended ~1.8m apart) instead of tracking the squeeze. DexTrack
+        # likewise bounds the residual; this keeps the policy in the feasible
+        # neighbourhood of the kinematic reference.
+        self._cum_residual = np.clip(
+            self._cum_residual + action * C.RESIDUAL_SCALE * self._jnt_span,
+            -C.RESIDUAL_CLIP * self._jnt_span, C.RESIDUAL_CLIP * self._jnt_span)
         ref = self.ref.sample(self.t)
         target = np.clip(ref["hand_qpos"] + self._cum_residual,
                          self._jnt_lo, self._jnt_hi)

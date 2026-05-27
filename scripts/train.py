@@ -30,6 +30,13 @@ def parse_args():
     p.add_argument("--sides", default="R", help="arms to control, e.g. 'R' or 'R,L'")
     p.add_argument("--vec", default="sync", choices=["sync", "process"],
                    help="'process' runs each env on its own core (multi-core)")
+    # The training env's object MUST match the one the reference was generated
+    # with (geometry, mass, spawn) — otherwise the policy squeezes a different
+    # object than the reference poses were designed for.
+    p.add_argument("--obj-type", default="box")
+    p.add_argument("--obj-mass", type=float, default=0.08)
+    p.add_argument("--obj-dims", default=None, help="comma list, e.g. 0.04,0.045,0.07")
+    p.add_argument("--obj-pos", default=None, help="comma list x,y,z")
     p.add_argument("--total-steps", type=int, default=500_000)
     p.add_argument("--num-envs", type=int, default=8)
     p.add_argument("--rollout-steps", type=int, default=64)
@@ -67,9 +74,14 @@ def main():
         ref = tj.load_npz(args.ref, joints)
         print(f"[train] tracking reference {args.ref} ({ref.n_frames} frames, "
               f"sides={sides}, {len(joints)}-DoF)")
+    obj_kwargs = dict(obj_type=args.obj_type, obj_mass=args.obj_mass)
+    if args.obj_dims:
+        obj_kwargs["obj_dims"] = tuple(float(x) for x in args.obj_dims.split(","))
+    if args.obj_pos:
+        obj_kwargs["obj_pos"] = tuple(float(x) for x in args.obj_pos.split(","))
     envs = make_vec_env(args.vec, num_envs=args.num_envs, seed=args.seed,
-                        sides=sides, ref=ref)
-    print(f"[train] vec={args.vec} num_envs={args.num_envs}")
+                        sides=sides, ref=ref, **obj_kwargs)
+    print(f"[train] vec={args.vec} num_envs={args.num_envs} obj={obj_kwargs}")
     obs_dim, act_dim = envs.obs_dim, envs.action_dim
     agent = ActorCritic(obs_dim, act_dim).to(device)
     opt = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
@@ -180,12 +192,17 @@ def main():
         if update % 5 == 0 or update == 1:
             print(f"upd {update:4d}  step {global_step:>8d}  ret {mret:7.1f}  "
                   f"objErr {mpos:5.1f}cm  rotErr {mrot:4.2f}  qErr {mqer:.3f}  "
-                  f"vloss {v_loss:6.2f}  {sps} sps")
+                  f"vloss {v_loss:6.2f}  {sps} sps", flush=True)
+        # periodic checkpoint so a crash (e.g. an OOM-killed worker) doesn't
+        # discard the whole run — always leaves a recent, loadable ckpt.pt.
+        if update % 100 == 0:
+            torch.save({"model": agent.state_dict(), "obs_dim": obs_dim,
+                        "act_dim": act_dim}, out / "ckpt.pt")
 
     torch.save({"model": agent.state_dict(), "obs_dim": obs_dim,
                 "act_dim": act_dim}, out / "ckpt.pt")
     csv_f.close()
-    print(f"[train] saved {out/'ckpt.pt'}")
+    print(f"[train] saved {out/'ckpt.pt'}", flush=True)
 
 
 if __name__ == "__main__":
