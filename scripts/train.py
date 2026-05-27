@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from dextrack_vega.envs.vec_env import SyncVectorEnv
+from dextrack_vega.envs.vec_env import make_vec_env
 from dextrack_vega.learning import ActorCritic
 
 
@@ -27,6 +27,9 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--run-name", default=None)
     p.add_argument("--ref", default=None, help="ReferenceTrajectory .npz to track")
+    p.add_argument("--sides", default="R", help="arms to control, e.g. 'R' or 'R,L'")
+    p.add_argument("--vec", default="sync", choices=["sync", "process"],
+                   help="'process' runs each env on its own core (multi-core)")
     p.add_argument("--total-steps", type=int, default=500_000)
     p.add_argument("--num-envs", type=int, default=8)
     p.add_argument("--rollout-steps", type=int, default=64)
@@ -55,13 +58,18 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"[train] run={args.run_name} device={device}")
 
+    sides = args.sides.split(",")
     ref = None
     if args.ref:
         from dextrack_vega.utils import trajectory as tj
         from dextrack_vega import config as C
-        ref = tj.load_npz(args.ref, C.controlled_joints("R"))
-        print(f"[train] tracking reference {args.ref} ({ref.n_frames} frames)")
-    envs = SyncVectorEnv(num_envs=args.num_envs, seed=args.seed, ref=ref)
+        joints = [j for s in sides for j in C.controlled_joints(s)]
+        ref = tj.load_npz(args.ref, joints)
+        print(f"[train] tracking reference {args.ref} ({ref.n_frames} frames, "
+              f"sides={sides}, {len(joints)}-DoF)")
+    envs = make_vec_env(args.vec, num_envs=args.num_envs, seed=args.seed,
+                        sides=sides, ref=ref)
+    print(f"[train] vec={args.vec} num_envs={args.num_envs}")
     obs_dim, act_dim = envs.obs_dim, envs.action_dim
     agent = ActorCritic(obs_dim, act_dim).to(device)
     opt = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)

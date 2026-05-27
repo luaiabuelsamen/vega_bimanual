@@ -41,6 +41,7 @@ class VegaTrackingEnv:
         obj_dims: tuple[float, ...] | None = None,
         obj_pos: tuple[float, float, float] = (0.6, -0.15, 0.80),
         obj_mass: float = 0.08,
+        rebuild: bool = True,
     ):
         # `sides` (list) drives single- vs bi-manual; `side` (str) kept for the
         # common single-arm call. Bimanual = sides=["R","L"]: the controlled
@@ -53,8 +54,13 @@ class VegaTrackingEnv:
         self.weights = weights or rw.RewardWeights()
 
         # --- model / data ---
-        assets.build_scene(sides=self.sides, obj_type=obj_type, obj_dims=obj_dims,
-                           obj_pos=obj_pos, obj_mass=obj_mass)
+        # `rebuild=False` skips regenerating the shared scene XML — used by the
+        # subprocess vector env, where the parent builds the (identical) scene
+        # once and the workers just load it, so N processes don't race writing
+        # the same file.
+        if rebuild:
+            assets.build_scene(sides=self.sides, obj_type=obj_type, obj_dims=obj_dims,
+                               obj_pos=obj_pos, obj_mass=obj_mass)
         self.model = mujoco.MjModel.from_xml_path(str(C.GENERATED_SCENE))
         self.data = mujoco.MjData(self.model)
         self.dt = self.model.opt.timestep * C.CONTROL_DECIMATION
