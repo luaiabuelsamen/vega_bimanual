@@ -355,10 +355,181 @@ class DemoGen:
         return traj
 
 
+# Inward squeeze grip used by the bimanual lift: fingers curl moderately so each
+# hand cups the box's side face and wraps the top/bottom edges. Both hands do
+# this in mirror, so the two palms provide the object opposition (the inter-hand
+# "force closure") that a single f5d6 hand cannot — that's the whole point of the
+# bimanual lift.
+SQUEEZE = {
+    "th_j0": 1.2, "th_j1": 0.4, "th_j2": -0.6,
+    "ff_j1": -0.7, "ff_j2": -0.9,
+    "mf_j1": -0.7, "mf_j2": -0.9,
+    "rf_j1": -0.7, "rf_j2": -0.9,
+    "lf_j1": -0.7, "lf_j2": -0.9,
+}
+
+
+class BimanualDemoGen:
+    """Two-arm reference generator. Builds a *kinematic* DexTrack-style target
+    (hand-joint trajectory + object 6-DoF) for a cooperative squeeze-and-lift:
+    the R and L hands approach opposite faces of a box, close to apply an inward
+    squeeze, then lift it together. Like generate_lift_ref this is a kinematic
+    *target* (object locked to the hands during the lift), not a physics replay —
+    the RL tracker is what must learn to realize the grip. This is the bimanual
+    analogue of what DexTrack tracks, and it's the one manipulation that is
+    impossible for a single f5d6 hand (thumb can't oppose < ~3.1cm)."""
+
+    def __init__(self, seed=0, **env_kwargs):
+        self.sides = ["R", "L"]
+        self.env = VegaTrackingEnv(sides=self.sides, seed=seed, **env_kwargs)
+        self.m, self.d = self.env.model, self.env.data
+        self.ctrl_joints = self.env.ctrl_joints
+        self.obj_q = self.env._obj_qadr
+        # per-side index bookkeeping
+        self.arm = {s: C.ARM_JOINTS[s] for s in self.sides}
+        self.arm_qadr, self.arm_dof, self.arm_lo, self.arm_hi = {}, {}, {}, {}
+        self.ft_bids, self.wrist_bid = {}, {}
+        # ctrl_joints is [R arm7, R hand11, L arm7, L hand11]; fingertips are the
+        # first 5 (R) then next 5 (L) of env._ft_bids.
+        for k, s in enumerate(self.sides):
+            self.arm_qadr[s] = np.array(
+                [self.m.jnt_qposadr[self._jid(j)] for j in self.arm[s]])
+            self.arm_dof[s] = np.array(
+                [self.m.jnt_dofadr[self._jid(j)] for j in self.arm[s]])
+            r = self.m.jnt_range[[self._jid(j) for j in self.arm[s]]]
+            self.arm_lo[s], self.arm_hi[s] = r[:, 0], r[:, 1]
+            self.ft_bids[s] = self.env._ft_bids[5 * k:5 * k + 5]
+            self.wrist_bid[s] = self.env._bid(C.WRIST_BODY[s])
+        # offset of each side's 18-joint block within the 36-vector
+        self.block = {"R": 0, "L": 18}
+        self.rec_q, self.rec_op, self.rec_oq = [], [], []
+
+    def _jid(self, n): return mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_JOINT, n)
+
+    def reset(self):
+        mujoco.mj_resetData(self.m, self.d)
+        for j, v in C.HOME_POSTURE.items():
+            self.d.qpos[self.m.jnt_qposadr[self._jid(j)]] = v
+        mujoco.mj_forward(self.m, self.d)
+
+    def obj_pos(self):
+        return self.d.qpos[self.obj_q:self.obj_q + 3].copy()
+
+    def ft_centroid(self, side):
+        return self.d.xpos[self.ft_bids[side]].mean(0).copy()
+
+    # ---- per-side position IK: move `side` arm so its fingertip centroid -> goal
+    def ik_side_to(self, side, goal, iters=300, damp=0.12, step_clip=0.05):
+        q_save = self.d.qpos.copy(); v_save = self.d.qvel.copy()
+        qadr, dof = self.arm_qadr[side], self.arm_dof[side]
+        lo, hi = self.arm_lo[side], self.arm_hi[side]
+        jp = np.zeros((3, self.m.nv)); jr = np.zeros((3, self.m.nv))
+        for _ in range(iters):
+            mujoco.mj_forward(self.m, self.d)
+            err = goal - self.ft_centroid(side)
+            if np.linalg.norm(err) < 3e-3:
+                break
+            J = np.zeros((3, self.m.nv))
+            for b in self.ft_bids[side]:
+                mujoco.mj_jacBody(self.m, self.d, jp, jr, b); J += jp
+            J /= len(self.ft_bids[side])
+            Ja = J[:, dof]
+            dq = Ja.T @ np.linalg.solve(Ja @ Ja.T + damp ** 2 * np.eye(3), err)
+            dq = np.clip(dq, -step_clip, step_clip)
+            self.d.qpos[qadr] = np.clip(self.d.qpos[qadr] + dq, lo, hi)
+        sol = self.d.qpos[qadr].copy()
+        self.d.qpos[:] = q_save; self.d.qvel[:] = v_save
+        mujoco.mj_forward(self.m, self.d)
+        return sol
+
+    def _assemble(self, arms: dict, fingers: dict):
+        """Build a 36-vec from per-side arm solutions + per-side finger tables.
+        `fingers[side]` is a {suffix: value} dict; unset finger joints keep their
+        current value."""
+        full = self.d.qpos[self.env._jnt_qposadr].copy()
+        for s in self.sides:
+            b = self.block[s]
+            full[b:b + 7] = arms[s]
+            for i, j in enumerate(self.ctrl_joints[b + 7:b + 18]):
+                for suf, val in fingers[s].items():
+                    if j.endswith(suf):
+                        full[b + 7 + i] = val
+        return full
+
+    def generate_squeeze_lift(self, lift_h=0.18, face_inset=0.0):
+        """approach -> squeeze opposite faces -> lift together (kinematic)."""
+        self.reset()
+        obj0 = self.obj_pos()
+        objq0 = self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy()
+        # box y half-extent (the faces the two hands press)
+        gid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "object_geom")
+        hy = float(self.m.geom_size[gid][1])
+        # contact: fingertip centroid just at each ±y face (R from -y, L from +y)
+        cR = obj0 + np.array([0.0, -(hy - face_inset), 0.0])
+        cL = obj0 + np.array([0.0, +(hy - face_inset), 0.0])
+        up = np.array([0.0, 0.0, 1.0])
+        aboveR, aboveL = cR + 0.08 * up, cL + 0.08 * up
+
+        # arm IK at approach and contact (per side)
+        armA = {"R": self.ik_side_to("R", aboveR), "L": self.ik_side_to("L", aboveL)}
+        armC = {"R": self.ik_side_to("R", cR), "L": self.ik_side_to("L", cL)}
+        # lift waypoints: re-IK the contact at each rising height so the centroid
+        # stays on the box's side face (a single end-IK lets the wrists drift and
+        # converge on top — re-solving keeps the squeeze on the sides).
+        n_lift = 5
+        lift_arms = []  # list of (frac, arm_dict)
+        for i in range(1, n_lift + 1):
+            dz = lift_h * i / n_lift
+            lift_arms.append((i / n_lift, {
+                "R": self.ik_side_to("R", cR + dz * up),
+                "L": self.ik_side_to("L", cL + dz * up)}))
+        f_open = {s: dict(OPEN) for s in self.sides}
+        f_sq = {s: dict(SQUEEZE) for s in self.sides}
+
+        def lerp(a, b, s): return (1 - s) * np.asarray(a) + s * np.asarray(b)
+        def smooth(s): return 3 * s ** 2 - 2 * s ** 3
+
+        def seg(aA, aB, fA, fB, oA, oB, n):
+            for k in range(n):
+                s = smooth((k + 1) / n)
+                arms = {sd: lerp(aA[sd], aB[sd], s) for sd in self.sides}
+                figs = {sd: {suf: (1 - s) * fA[sd][suf] + s * fB[sd][suf]
+                             for suf in fA[sd]} for sd in self.sides}
+                self.rec_q.append(self._assemble(arms, figs))
+                self.rec_op.append(lerp(oA, oB, s))
+                self.rec_oq.append(objq0)
+
+        seg(armA, armA, f_open, f_open, obj0, obj0, 15)    # settle above
+        seg(armA, armC, f_open, f_open, obj0, obj0, 40)    # descend to faces
+        seg(armC, armC, f_open, f_sq,  obj0, obj0, 30)     # squeeze closed
+        # lift in chained re-IK'd waypoints, object rising with the hands
+        prev_arm, prev_o = armC, obj0
+        for frac, arm in lift_arms:
+            o = obj0 + frac * lift_h * up
+            seg(prev_arm, arm, f_sq, f_sq, prev_o, o, 14)
+            prev_arm, prev_o = arm, o
+        seg(prev_arm, prev_arm, f_sq, f_sq, prev_o, prev_o, 15)  # hold at top
+        return float(lift_h)
+
+    def save(self, path):
+        traj = tj.ReferenceTrajectory(
+            obj_pos=np.array(self.rec_op), obj_quat=np.array(self.rec_oq),
+            hand_qpos=np.array(self.rec_q), dt=self.env.dt,
+            joint_names=self.ctrl_joints)
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        tj.save_npz(path, traj)
+        return traj
+
+
 # Pole preset: a vertical cylinder at the feasible wrap-grasp pose found by the
 # workspace orientation search (X+90 reachable, perr ~2mm).
 POLE = dict(obj_type="cylinder", obj_dims=(0.016, 0.07), obj_pos=(0.55, -0.15, 0.84),
             obj_mass=0.05)
+
+# Bimanual box preset: centred on the robot midline (y=0) so both arms reach it
+# symmetrically, sized so the two palms have a face to press (8x9x14 cm).
+BIM_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07), obj_pos=(0.55, 0.0, 0.80),
+               obj_mass=0.12)
 
 
 def main():
@@ -366,8 +537,22 @@ def main():
     ap.add_argument("--out", default="demos/push_box.npz")
     ap.add_argument("--side", default="R")
     ap.add_argument("--task", default="push",
-                    choices=["push", "lift", "lift_ref", "reorient"])
+                    choices=["push", "lift", "lift_ref", "reorient", "bim_lift"])
     args = ap.parse_args()
+
+    if args.task == "bim_lift":
+        # bimanual cooperative squeeze-and-lift (kinematic DexTrack-style target)
+        gen = BimanualDemoGen(**BIM_BOX)
+        lift_h = gen.generate_squeeze_lift()
+        traj = gen.save(args.out)
+        obj_dz = (traj.obj_pos[-1] - traj.obj_pos[0])[2]
+        print(f"[make_demo] task=bim_lift frames={traj.n_frames} dur={traj.duration:.2f}s  "
+              f"action_dim={gen.env.action_dim}  object lift={obj_dz*100:.1f}cm "
+              f"(kinematic target)  -> {args.out}")
+        print("[make_demo] NOTE: kinematic reference (object locked to the two "
+              "hands during the lift); open-loop physics will NOT reproduce it — "
+              "the RL tracker must learn the cooperative grip.")
+        return
 
     if args.task == "lift_ref":
         # kinematic pick-and-lift reference on the pole (target for RL tracking)

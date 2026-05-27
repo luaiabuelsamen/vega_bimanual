@@ -6,11 +6,21 @@
 > bimanual as the goal.
 
 <p align="center">
-  <img src="media/reorient.gif" width="520" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
+  <img src="media/bim_lift.gif" width="520" alt="Two Vega f5d6 hands cooperatively lifting a box off the table"/>
 </p>
 
-*Above: the policy's reference — the f5d6 hand reorienting a box ~140° on the table by
-off-center pushing (nonprehensile manipulation).*
+*Above: a bimanual cooperative squeeze-and-lift reference — the two f5d6 hands press
+opposite faces of a box and lift it off the table together. This is the one
+manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the fingers
+closer than ~3.1 cm); the second hand provides the missing object opposition. It's
+the bimanual analogue of what DexTrack tracks.*
+
+<p align="center">
+  <img src="media/reorient.gif" width="360" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
+</p>
+
+*Single-arm: the f5d6 hand reorienting a box ~140° on the table by off-center
+pushing (nonprehensile).*
 
 ## What I'm trying to do
 
@@ -51,7 +61,8 @@ manipulation.
 | **Reorient** task (object yaw tracking) | ✅ demo + training |
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
-| Bimanual cooperative demo + training | 🚧 next |
+| **Bimanual squeeze-and-lift** reference (cooperative) | ✅ demo (kinematic target) |
+| Bimanual cooperative *training* | 🚧 next |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
 | Parallel sim (mujoco_warp) for throughput | 🚧 |
 
@@ -69,6 +80,11 @@ naturally to two-arm cooperative manipulation.
 ```bash
 # generate a reference demo
 PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_box.npz
+
+# generate the bimanual cooperative squeeze-and-lift reference (36-DoF, two arms)
+PYTHONPATH=. python scripts/make_demo.py --task bim_lift --out demos/bim_lift_box.npz
+MUJOCO_GL=egl PYTHONPATH=. python scripts/render_gif.py \
+    --ref demos/bim_lift_box.npz --sides R,L --out media/bim_lift.gif
 
 # train the tracker on it
 PYTHONPATH=. python scripts/train.py --ref demos/reorient_box.npz --total-steps 250000

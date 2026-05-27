@@ -23,21 +23,31 @@ def main():
     ap.add_argument("--ref", required=True)
     ap.add_argument("--out", default="media/demo.gif")
     ap.add_argument("--side", default="R")
+    ap.add_argument("--sides", default=None,
+                    help="comma list e.g. R,L for a bimanual reference")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--stride", type=int, default=2, help="keep every Nth frame")
     ap.add_argument("--w", type=int, default=640)
     ap.add_argument("--h", type=int, default=480)
     args = ap.parse_args()
 
-    ref = tj.load_npz(args.ref, C.controlled_joints(args.side))
-    env = VegaTrackingEnv(side=args.side, ref=ref)
+    sides = args.sides.split(",") if args.sides else [args.side]
+    joints = [j for s in sides for j in C.controlled_joints(s)]
+    ref = tj.load_npz(args.ref, joints)
+    env = VegaTrackingEnv(sides=sides, ref=ref)
     m, d = env.model, env.data
 
     cam = mujoco.MjvCamera()
-    cam.lookat[:] = [0.58, -0.15, 0.82]
-    cam.distance = 1.3
-    cam.azimuth = 140
-    cam.elevation = -22
+    if len(sides) > 1:  # bimanual: object on midline; oblique 3/4 so both arms
+        cam.lookat[:] = [0.5, 0.0, 0.9]   # show (azimuth 90 collapses them)
+        cam.distance = 1.5
+        cam.azimuth = 35
+        cam.elevation = -20
+    else:
+        cam.lookat[:] = [0.58, -0.15, 0.82]
+        cam.distance = 1.3
+        cam.azimuth = 140
+        cam.elevation = -22
 
     frames = []
     with mujoco.Renderer(m, height=args.h, width=args.w) as r:

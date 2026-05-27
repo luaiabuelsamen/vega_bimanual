@@ -12,3 +12,6 @@ runs_*.log
 # scratch
 *.tmp
 .DS_Store
+
+# mujoco runtime log
+MUJOCO_LOG.TXT
