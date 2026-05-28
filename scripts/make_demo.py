@@ -75,6 +75,7 @@ class DemoGen:
         self.wrist_bid = self.env._bid(C.WRIST_BODY[side])
         self.obj_q = self.env._obj_qadr
         self.rec_q, self.rec_op, self.rec_oq = [], [], []
+        self.rec_ctrl = []  # what drive_to *commanded* each control step
         self.rec_ftd = []  # per-frame nearest fingertip-to-object distance
 
     def _jid(self, n): return mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_JOINT, n)
@@ -203,11 +204,13 @@ class DemoGen:
         for k in range(n):
             a = (k + 1) / n
             s = 3 * a ** 2 - 2 * a ** 3 if blend else 1.0
-            self.set_ctrl(start + s * (target_qpos - start))
+            ctrl = start + s * (target_qpos - start)
+            self.set_ctrl(ctrl)
             for _ in range(C.CONTROL_DECIMATION):
                 mujoco.mj_step(self.m, self.d)
             if record:
                 self.rec_q.append(self.cur_qpos())
+                self.rec_ctrl.append(ctrl.copy())  # what we commanded this step
                 self.rec_op.append(self.obj_pos())
                 self.rec_oq.append(
                     self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy())
@@ -349,7 +352,8 @@ class DemoGen:
         traj = tj.ReferenceTrajectory(
             obj_pos=np.array(self.rec_op), obj_quat=np.array(self.rec_oq),
             hand_qpos=np.array(self.rec_q), dt=self.env.dt,
-            joint_names=self.ctrl_joints)
+            joint_names=self.ctrl_joints,
+            hand_ctrl=(np.array(self.rec_ctrl) if self.rec_ctrl else None))
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         tj.save_npz(path, traj)
         return traj
@@ -403,6 +407,7 @@ class BimanualDemoGen:
         # offset of each side's 18-joint block within the 36-vector
         self.block = {"R": 0, "L": 18}
         self.rec_q, self.rec_op, self.rec_oq = [], [], []
+        self.rec_ctrl = []  # what drive_to commanded each control step
 
     def _jid(self, n): return mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_JOINT, n)
 
@@ -462,11 +467,13 @@ class BimanualDemoGen:
         for k in range(n):
             a = (k + 1) / n
             s = 3 * a ** 2 - 2 * a ** 3 if blend else 1.0
-            self.d.ctrl[self.env._act_ctrl_idx] = start + s * (target_qpos - start)
+            ctrl = start + s * (target_qpos - start)
+            self.d.ctrl[self.env._act_ctrl_idx] = ctrl
             for _ in range(C.CONTROL_DECIMATION):
                 mujoco.mj_step(self.m, self.d)
             if record:
                 self.rec_q.append(self.d.qpos[self.env._jnt_qposadr].copy())
+                self.rec_ctrl.append(ctrl.copy())
                 self.rec_op.append(self.obj_pos())
                 self.rec_oq.append(self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy())
 
@@ -513,27 +520,29 @@ class BimanualDemoGen:
         return self.obj_pos() - obj0
 
     def generate_squeeze_lift(self, lift_h=0.18, face_inset=0.0):
-        """approach -> squeeze opposite faces -> lift together (kinematic)."""
+        """approach -> squeeze opposite faces -> lift together. The reference is
+        a KINEMATIC target trajectory (object locked to the hands during lift);
+        the env then realizes it in physics via the residual policy. Both
+        hand_qpos AND hand_ctrl record the same ideal interpolated pose — the
+        env's ctrl-replay mode then uses those ideal poses as actuator targets
+        (the historically working open-loop +21cm came from exactly this: the
+        OLD env's qpos-as-ctrl replay was effectively applying these ideal
+        poses as ctrl; making it explicit via hand_ctrl preserves that behavior
+        while also fixing contact-rich tracks like bim_reorient)."""
         self.reset()
         obj0 = self.obj_pos()
         objq0 = self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy()
-        # box y half-extent (the faces the two hands press)
         gid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "object_geom")
         hy = float(self.m.geom_size[gid][1])
-        # contact: fingertip centroid just at each ±y face (R from -y, L from +y)
         cR = obj0 + np.array([0.0, -(hy - face_inset), 0.0])
         cL = obj0 + np.array([0.0, +(hy - face_inset), 0.0])
         up = np.array([0.0, 0.0, 1.0])
         aboveR, aboveL = cR + 0.08 * up, cL + 0.08 * up
 
-        # arm IK at approach and contact (per side)
         armA = {"R": self.ik_side_to("R", aboveR), "L": self.ik_side_to("L", aboveL)}
         armC = {"R": self.ik_side_to("R", cR), "L": self.ik_side_to("L", cL)}
-        # lift waypoints: re-IK the contact at each rising height so the centroid
-        # stays on the box's side face (a single end-IK lets the wrists drift and
-        # converge on top — re-solving keeps the squeeze on the sides).
         n_lift = 5
-        lift_arms = []  # list of (frac, arm_dict)
+        lift_arms = []
         for i in range(1, n_lift + 1):
             dz = lift_h * i / n_lift
             lift_arms.append((i / n_lift, {
@@ -551,14 +560,15 @@ class BimanualDemoGen:
                 arms = {sd: lerp(aA[sd], aB[sd], s) for sd in self.sides}
                 figs = {sd: {suf: (1 - s) * fA[sd][suf] + s * fB[sd][suf]
                              for suf in fA[sd]} for sd in self.sides}
-                self.rec_q.append(self._assemble(arms, figs))
+                pose = self._assemble(arms, figs)
+                self.rec_q.append(pose)
+                self.rec_ctrl.append(pose.copy())  # ideal pose = ctrl target
                 self.rec_op.append(lerp(oA, oB, s))
                 self.rec_oq.append(objq0)
 
         seg(armA, armA, f_open, f_open, obj0, obj0, 15)    # settle above
         seg(armA, armC, f_open, f_open, obj0, obj0, 40)    # descend to faces
         seg(armC, armC, f_open, f_sq,  obj0, obj0, 30)     # squeeze closed
-        # lift in chained re-IK'd waypoints, object rising with the hands
         prev_arm, prev_o = armC, obj0
         for frac, arm in lift_arms:
             o = obj0 + frac * lift_h * up
@@ -571,7 +581,8 @@ class BimanualDemoGen:
         traj = tj.ReferenceTrajectory(
             obj_pos=np.array(self.rec_op), obj_quat=np.array(self.rec_oq),
             hand_qpos=np.array(self.rec_q), dt=self.env.dt,
-            joint_names=self.ctrl_joints)
+            joint_names=self.ctrl_joints,
+            hand_ctrl=(np.array(self.rec_ctrl) if self.rec_ctrl else None))
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         tj.save_npz(path, traj)
         return traj

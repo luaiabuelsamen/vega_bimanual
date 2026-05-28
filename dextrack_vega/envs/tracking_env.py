@@ -155,8 +155,9 @@ class VegaTrackingEnv:
         self.data.qpos[self._obj_qadr:self._obj_qadr + 3] = ref0["obj_pos"]
         self.data.qpos[self._obj_qadr + 3:self._obj_qadr + 7] = ref0["obj_quat"]
 
-        # initialise actuator targets to the reference so we don't snap.
-        self.data.ctrl[self._act_ctrl_idx] = ref0["hand_qpos"]
+        # initialise actuator targets to the reference's commanded ctrl when
+        # available (else qpos) so we don't snap.
+        self.data.ctrl[self._act_ctrl_idx] = ref0.get("hand_ctrl", ref0["hand_qpos"])
         mujoco.mj_forward(self.model, self.data)
         return self._obs()
 
@@ -164,16 +165,18 @@ class VegaTrackingEnv:
         action = np.clip(np.asarray(action, np.float64), -1.0, 1.0)
         # cumulative residual position target with kinematic bias. The residual
         # is CLAMPED to a fraction of each joint's span so it can only *correct*
-        # the reference, never drift away from it: an unbounded cumulative
-        # residual let the bimanual policy walk the arms to their joint limits
-        # (hands ended ~1.8m apart) instead of tracking the squeeze. DexTrack
-        # likewise bounds the residual; this keeps the policy in the feasible
-        # neighbourhood of the kinematic reference.
+        # the reference, never drift away from it.
         self._cum_residual = np.clip(
             self._cum_residual + action * C.RESIDUAL_SCALE * self._jnt_span,
             -C.RESIDUAL_CLIP * self._jnt_span, C.RESIDUAL_CLIP * self._jnt_span)
         ref = self.ref.sample(self.t)
-        target = np.clip(ref["hand_qpos"] + self._cum_residual,
+        # Actuator-target baseline: the demo's *commanded* ctrl when available
+        # (hand_ctrl), else fall back to hand_qpos. Using hand_qpos as ctrl is a
+        # lagging-controller bug — ctrl ~= qpos means tiny actuator force, so
+        # under zero residual the env produces materially different physics than
+        # the demo. Contact-rich bimanual tracking is very sensitive to this.
+        base = ref["hand_ctrl"] if "hand_ctrl" in ref else ref["hand_qpos"]
+        target = np.clip(base + self._cum_residual,
                          self._jnt_lo, self._jnt_hi)
         self.data.ctrl[self._act_ctrl_idx] = target
 

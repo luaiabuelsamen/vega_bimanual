@@ -24,14 +24,23 @@ class ReferenceTrajectory:
     """One kinematic reference to track. Times are in seconds from t=0."""
     obj_pos: np.ndarray      # [T, 3]
     obj_quat: np.ndarray     # [T, 4] wxyz
-    hand_qpos: np.ndarray    # [T, n_ctrl]
+    hand_qpos: np.ndarray    # [T, n_ctrl]   (what *resulted* — for reward only)
     dt: float                # seconds between frames
     joint_names: list[str]   # length n_ctrl, matches hand_qpos columns
+    # Optional: what the demo *commanded* (actuator ctrl issued by drive_to).
+    # When present, the env uses this as the actuator-target baseline instead of
+    # hand_qpos. The qpos-as-ctrl replay is a lagging-controller bug — for
+    # contact-rich bimanual tracking it produces materially different physics
+    # than the demo, which made the residual policy chase an unreachable target.
+    hand_ctrl: np.ndarray | None = None  # [T, n_ctrl] or None
 
     def __post_init__(self):
         self.obj_pos = np.asarray(self.obj_pos, np.float64)
         self.obj_quat = T.quat_normalize(np.asarray(self.obj_quat, np.float64))
         self.hand_qpos = np.asarray(self.hand_qpos, np.float64)
+        if self.hand_ctrl is not None:
+            self.hand_ctrl = np.asarray(self.hand_ctrl, np.float64)
+            assert self.hand_ctrl.shape == self.hand_qpos.shape, "ctrl/qpos mismatch"
         assert self.obj_pos.shape[0] == self.hand_qpos.shape[0], "frame mismatch"
         assert self.hand_qpos.shape[1] == len(self.joint_names)
 
@@ -49,11 +58,14 @@ class ReferenceTrajectory:
         i0 = int(np.floor(f))
         i1 = min(i0 + 1, self.n_frames - 1)
         a = f - i0
-        return {
+        out = {
             "obj_pos": (1 - a) * self.obj_pos[i0] + a * self.obj_pos[i1],
             "obj_quat": T.slerp(self.obj_quat[i0], self.obj_quat[i1], a),
             "hand_qpos": (1 - a) * self.hand_qpos[i0] + a * self.hand_qpos[i1],
         }
+        if self.hand_ctrl is not None:
+            out["hand_ctrl"] = (1 - a) * self.hand_ctrl[i0] + a * self.hand_ctrl[i1]
+        return out
 
     def window(self, t: float, horizon: int) -> dict:
         """Stack `horizon` future references (one per dt) for the obs window."""
@@ -66,19 +78,24 @@ class ReferenceTrajectory:
 
 
 def load_npz(path: str | Path, joint_names: list[str]) -> ReferenceTrajectory:
-    """Load a reference saved with keys obj_pos, obj_quat, hand_qpos, dt."""
+    """Load a reference saved with keys obj_pos, obj_quat, hand_qpos, dt
+    (and optionally hand_ctrl)."""
     d = np.load(path)
     return ReferenceTrajectory(
         obj_pos=d["obj_pos"], obj_quat=d["obj_quat"],
         hand_qpos=d["hand_qpos"], dt=float(d["dt"]),
         joint_names=list(d["joint_names"]) if "joint_names" in d else joint_names,
+        hand_ctrl=d["hand_ctrl"] if "hand_ctrl" in d.files else None,
     )
 
 
 def save_npz(path: str | Path, traj: ReferenceTrajectory) -> None:
-    np.savez(path, obj_pos=traj.obj_pos, obj_quat=traj.obj_quat,
-             hand_qpos=traj.hand_qpos, dt=traj.dt,
-             joint_names=np.array(traj.joint_names))
+    payload = dict(obj_pos=traj.obj_pos, obj_quat=traj.obj_quat,
+                   hand_qpos=traj.hand_qpos, dt=traj.dt,
+                   joint_names=np.array(traj.joint_names))
+    if traj.hand_ctrl is not None:
+        payload["hand_ctrl"] = traj.hand_ctrl
+    np.savez(path, **payload)
 
 
 def make_synthetic(
