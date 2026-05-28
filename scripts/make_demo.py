@@ -205,18 +205,25 @@ class DemoGen:
             a = (k + 1) / n
             s = 3 * a ** 2 - 2 * a ** 3 if blend else 1.0
             ctrl = start + s * (target_qpos - start)
-            self.set_ctrl(ctrl)
-            for _ in range(C.CONTROL_DECIMATION):
-                mujoco.mj_step(self.m, self.d)
+            # PRE-step recording: snapshot state BEFORE this step's mj_step, paired
+            # with the ctrl we're about to apply. Then env.reset (qpos=rec_q[0],
+            # qvel=0) matches the demo's true pre-state, and env.step applying
+            # rec_ctrl[k] reproduces rec_q[k+1] bit-for-bit. (Post-step recording
+            # made env start at a post-step pose with qvel=0 — i.e. without the
+            # momentum that was actually present, so contact-sensitive replays
+            # diverged.)
             if record:
                 self.rec_q.append(self.cur_qpos())
-                self.rec_ctrl.append(ctrl.copy())  # what we commanded this step
+                self.rec_ctrl.append(ctrl.copy())
                 self.rec_op.append(self.obj_pos())
                 self.rec_oq.append(
                     self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy())
                 d_ft = np.linalg.norm(
                     self.d.xpos[self.ft_bids] - self.obj_pos(), axis=1).min()
                 self.rec_ftd.append(d_ft)
+            self.set_ctrl(ctrl)
+            for _ in range(C.CONTROL_DECIMATION):
+                mujoco.mj_step(self.m, self.d)
 
     # ---- the scripted demo ----
     def generate(self, task="push", push_vec=(0.0, -0.13, 0.0), obj_half=0.03):
@@ -461,21 +468,22 @@ class BimanualDemoGen:
                         full[b + 7 + i] = val
         return full
 
-    # ---- physics-driven driver: set ctrl, mj_step, record real qpos + obj pose
+    # ---- physics-driven driver: pre-step record, set ctrl, mj_step
     def drive_to(self, target_qpos, n, record=True, blend=True):
         start = self.d.qpos[self.env._jnt_qposadr].copy()
         for k in range(n):
             a = (k + 1) / n
             s = 3 * a ** 2 - 2 * a ** 3 if blend else 1.0
             ctrl = start + s * (target_qpos - start)
-            self.d.ctrl[self.env._act_ctrl_idx] = ctrl
-            for _ in range(C.CONTROL_DECIMATION):
-                mujoco.mj_step(self.m, self.d)
+            # PRE-step recording (see DemoGen.drive_to)
             if record:
                 self.rec_q.append(self.d.qpos[self.env._jnt_qposadr].copy())
                 self.rec_ctrl.append(ctrl.copy())
                 self.rec_op.append(self.obj_pos())
                 self.rec_oq.append(self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy())
+            self.d.ctrl[self.env._act_ctrl_idx] = ctrl
+            for _ in range(C.CONTROL_DECIMATION):
+                mujoco.mj_step(self.m, self.d)
 
     def generate_reorient(self, sweep_dx=0.06, n_sweep=24):
         """BIMANUAL cooperative reorient: both hands contact opposite ±y faces of
