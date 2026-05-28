@@ -18,11 +18,21 @@ opposition. f5d6's weak opposition caps the liftable mass — the squeeze holds 
 0.05 kg box but slips on 0.12 kg.*
 
 <p align="center">
-  <img src="media/reorient.gif" width="360" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
+  <img src="media/bim_reorient.gif" width="420" alt="Two Vega f5d6 hands cooperatively yawing a box ~111° (nonprehensile couple)"/>
 </p>
 
-*Single-arm: the f5d6 hand reorienting a box ~140° on the table by off-center
-pushing (nonprehensile).*
+*A second bimanual task — **cooperative reorient**: both hands contact the box's
+opposite ±y faces and sweep tangentially in **opposite** x directions. The two
+opposing tangential drags form a couple about z, yawing the box **+111°**.
+Nonprehensile (no force closure needed), so it doesn't depend on the marginal
+friction grip that limits the lift.*
+
+<p align="center">
+  <img src="media/reorient.gif" width="320" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
+</p>
+
+*Single-arm reorient for comparison: one f5d6 hand yawing a box ~140° by
+off-center pushing.*
 
 ## What I'm trying to do
 
@@ -68,8 +78,9 @@ manipulation.
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
 | **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
+| **Bimanual cooperative reorient** (physics couple, +111° yaw) | ✅ two hands yaw a box on the table |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
-| Bimanual *RL tracker* matching the open-loop lift | 🚧 partial (policy lifts ~4 cm; tuning residual bound / grip reward) |
+| Bimanual *RL tracker* matching the open-loop lift | 🚧 partial (policy lifts ~4 cm; bottleneck is exploration, not physics — friction probe at 2×/5× had no effect) |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
 | Parallel sim (mujoco_warp) for throughput | 🚧 |
 
@@ -88,7 +99,10 @@ naturally to two-arm cooperative manipulation.
 # generate a reference demo
 PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_box.npz
 
-# generate the bimanual cooperative squeeze-and-lift reference (36-DoF, two arms)
+# bimanual cooperative reorient (couple yaws the box ~111°)
+PYTHONPATH=. python scripts/make_demo.py --task bim_reorient --out demos/bim_reorient_box.npz
+
+# bimanual cooperative squeeze-and-lift reference (36-DoF, two arms)
 PYTHONPATH=. python scripts/make_demo.py --task bim_lift --out demos/bim_lift_box.npz
 # render it executed OPEN-LOOP in physics (real dynamics; prints the net lift)
 MUJOCO_GL=egl PYTHONPATH=. python scripts/render_gif.py \

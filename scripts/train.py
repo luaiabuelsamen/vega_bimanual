@@ -37,6 +37,8 @@ def parse_args():
     p.add_argument("--obj-mass", type=float, default=0.08)
     p.add_argument("--obj-dims", default=None, help="comma list, e.g. 0.04,0.045,0.07")
     p.add_argument("--obj-pos", default=None, help="comma list x,y,z")
+    p.add_argument("--obj-friction", default=None,
+                   help="MuJoCo friction tuple 'slide spin roll', e.g. '4.0 0.1 0.002'")
     p.add_argument("--total-steps", type=int, default=500_000)
     p.add_argument("--num-envs", type=int, default=8)
     p.add_argument("--rollout-steps", type=int, default=64)
@@ -79,6 +81,8 @@ def main():
         obj_kwargs["obj_dims"] = tuple(float(x) for x in args.obj_dims.split(","))
     if args.obj_pos:
         obj_kwargs["obj_pos"] = tuple(float(x) for x in args.obj_pos.split(","))
+    if args.obj_friction:
+        obj_kwargs["obj_friction"] = args.obj_friction
     envs = make_vec_env(args.vec, num_envs=args.num_envs, seed=args.seed,
                         sides=sides, ref=ref, **obj_kwargs)
     print(f"[train] vec={args.vec} num_envs={args.num_envs} obj={obj_kwargs}")

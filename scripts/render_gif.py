@@ -40,6 +40,8 @@ def main():
     ap.add_argument("--obj-mass", type=float, default=0.08)
     ap.add_argument("--obj-dims", default=None, help="comma list e.g. 0.04,0.045,0.07")
     ap.add_argument("--obj-pos", default=None, help="comma list x,y,z")
+    ap.add_argument("--obj-friction", default=None,
+                    help="MuJoCo friction tuple 'slide spin roll'")
     args = ap.parse_args()
 
     sides = args.sides.split(",") if args.sides else [args.side]
@@ -50,6 +52,8 @@ def main():
         obj_kwargs["obj_dims"] = tuple(float(x) for x in args.obj_dims.split(","))
     if args.obj_pos:
         obj_kwargs["obj_pos"] = tuple(float(x) for x in args.obj_pos.split(","))
+    if args.obj_friction:
+        obj_kwargs["obj_friction"] = args.obj_friction
     env = VegaTrackingEnv(sides=sides, ref=ref, **obj_kwargs)
     m, d = env.model, env.data
 

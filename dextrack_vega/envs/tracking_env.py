@@ -41,6 +41,7 @@ class VegaTrackingEnv:
         obj_dims: tuple[float, ...] | None = None,
         obj_pos: tuple[float, float, float] = (0.6, -0.15, 0.80),
         obj_mass: float = 0.08,
+        obj_friction: str = "2.0 0.05 0.002",
         rebuild: bool = True,
     ):
         # `sides` (list) drives single- vs bi-manual; `side` (str) kept for the
@@ -60,7 +61,8 @@ class VegaTrackingEnv:
         # the same file.
         if rebuild:
             assets.build_scene(sides=self.sides, obj_type=obj_type, obj_dims=obj_dims,
-                               obj_pos=obj_pos, obj_mass=obj_mass)
+                               obj_pos=obj_pos, obj_mass=obj_mass,
+                               obj_friction=obj_friction)
         self.model = mujoco.MjModel.from_xml_path(str(C.GENERATED_SCENE))
         self.data = mujoco.MjData(self.model)
         self.dt = self.model.opt.timestep * C.CONTROL_DECIMATION

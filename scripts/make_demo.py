@@ -456,6 +456,62 @@ class BimanualDemoGen:
                         full[b + 7 + i] = val
         return full
 
+    # ---- physics-driven driver: set ctrl, mj_step, record real qpos + obj pose
+    def drive_to(self, target_qpos, n, record=True, blend=True):
+        start = self.d.qpos[self.env._jnt_qposadr].copy()
+        for k in range(n):
+            a = (k + 1) / n
+            s = 3 * a ** 2 - 2 * a ** 3 if blend else 1.0
+            self.d.ctrl[self.env._act_ctrl_idx] = start + s * (target_qpos - start)
+            for _ in range(C.CONTROL_DECIMATION):
+                mujoco.mj_step(self.m, self.d)
+            if record:
+                self.rec_q.append(self.d.qpos[self.env._jnt_qposadr].copy())
+                self.rec_op.append(self.obj_pos())
+                self.rec_oq.append(self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy())
+
+    def generate_reorient(self, sweep_dx=0.06, n_sweep=24):
+        """BIMANUAL cooperative reorient: both hands contact opposite ±y faces of
+        a central box and sweep TANGENTIALLY in *opposite* x directions while
+        maintaining radial contact. The two opposing tangential drags form a
+        couple about z -> the box yaws. Nonprehensile (no force-closure needed),
+        so the grip-margin problem that limits the squeeze-lift doesn't apply.
+        Physics-driven (records real qpos + real obj pose)."""
+        self.reset()
+        obj0 = self.obj_pos()
+        gid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "object_geom")
+        hy = float(self.m.geom_size[gid][1])
+        # settle
+        self.drive_to(self.d.qpos[self.env._jnt_qposadr].copy(), n=20)
+        up = np.array([0.0, 0.0, 1.0])
+        # contact points: at each ±y face, midline in x (so tangential sweep
+        # passes through the centre line)
+        cR = obj0 + np.array([0.0, -hy, 0.0])
+        cL = obj0 + np.array([0.0, +hy, 0.0])
+        aboveR, aboveL = cR + 0.06 * up, cL + 0.06 * up
+
+        # 1. cup hands and reach above each face
+        armR = self.ik_side_to("R", aboveR); armL = self.ik_side_to("L", aboveL)
+        tgt = self._assemble({"R": armR, "L": armL},
+                             {"R": dict(SCOOP), "L": dict(SCOOP)})
+        self.drive_to(tgt, n=60)
+        # 2. descend to face contact
+        armR = self.ik_side_to("R", cR); armL = self.ik_side_to("L", cL)
+        tgt = self._assemble({"R": armR, "L": armL},
+                             {"R": dict(SCOOP), "L": dict(SCOOP)})
+        self.drive_to(tgt, n=50)
+        # 3. tangential sweep in OPPOSITE x directions -> couple about z.
+        # Small constant-position sub-steps re-IK each waypoint and chain at
+        # constant velocity, like the single-arm reorient sweep.
+        for k in range(n_sweep):
+            frac = (k + 1) / n_sweep
+            armR = self.ik_side_to("R", cR + np.array([-sweep_dx * frac, 0, 0]))
+            armL = self.ik_side_to("L", cL + np.array([+sweep_dx * frac, 0, 0]))
+            tgt = self._assemble({"R": armR, "L": armL},
+                                 {"R": dict(SCOOP), "L": dict(SCOOP)})
+            self.drive_to(tgt, n=6, blend=False)
+        return self.obj_pos() - obj0
+
     def generate_squeeze_lift(self, lift_h=0.18, face_inset=0.0):
         """approach -> squeeze opposite faces -> lift together (kinematic)."""
         self.reset()
@@ -536,14 +592,36 @@ POLE = dict(obj_type="cylinder", obj_dims=(0.016, 0.07), obj_pos=(0.55, -0.15, 0
 BIM_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07), obj_pos=(0.55, 0.0, 0.80),
                obj_mass=0.05)
 
+# Bimanual reorient preset: the same midline box, slightly heavier (the hands push
+# tangentially against the ±y faces, no lift, so weight makes it more stable
+# under uneven push — and the couple of two opposing tangential drags still
+# yaws it).
+BIM_REORIENT_BOX = dict(obj_type="box", obj_dims=(0.045, 0.045, 0.06),
+                        obj_pos=(0.55, 0.0, 0.80), obj_mass=0.1)
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="demos/push_box.npz")
     ap.add_argument("--side", default="R")
     ap.add_argument("--task", default="push",
-                    choices=["push", "lift", "lift_ref", "reorient", "bim_lift"])
+                    choices=["push", "lift", "lift_ref", "reorient",
+                             "bim_lift", "bim_reorient"])
     args = ap.parse_args()
+
+    if args.task == "bim_reorient":
+        gen = BimanualDemoGen(**BIM_REORIENT_BOX)
+        disp = gen.generate_reorient()
+        traj = gen.save(args.out)
+        def yaw(q): return np.degrees(2 * np.arctan2(q[3], q[0]))
+        dyaw = yaw(traj.obj_quat[-1]) - yaw(traj.obj_quat[0])
+        moved = float(np.linalg.norm(disp))
+        print(f"[make_demo] task=bim_reorient frames={traj.n_frames} dur={traj.duration:.2f}s "
+              f"action_dim={gen.env.action_dim}  yaw change {dyaw:+.0f} deg  "
+              f"translation {moved*100:.1f}cm  -> {args.out}")
+        if abs(dyaw) < 20:
+            print("[make_demo] WARNING: little rotation — bim_reorient likely failed.")
+        return
 
     if args.task == "bim_lift":
         # bimanual cooperative squeeze-and-lift (kinematic DexTrack-style target)
