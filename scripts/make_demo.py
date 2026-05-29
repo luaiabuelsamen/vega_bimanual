@@ -600,6 +600,90 @@ class BimanualDemoGen:
         seg(prev_arm, prev_arm, f_sq, f_sq, prev_o, prev_o, 15)
         return self.obj_pos() - obj0
 
+    def generate_reorient_kinematic(self, sweep_dx=0.035, n_sweep=24, yaw_deg=60):
+        """All-kinematic variant of bimanual reorient (object yaw locked to
+        interpolated trajectory). Both hands sweep tangentially as before, but
+        rec_q / rec_ctrl are the ideal interpolated poses (not physics-driven),
+        and the ref's obj_quat ramps from 0 to yaw_deg over the sweep. This is
+        the bim_lift pattern applied to reorient — env zero-residual then
+        reproduces the kinematic intent in physics (the two hands sweep, the box
+        yaws via friction), and BC of the zero-residual rollout gives a policy
+        that yaws the box."""
+        self.reset()
+        obj0 = self.obj_pos()
+        gid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "object_geom")
+        hy = float(self.m.geom_size[gid][1])
+        up = np.array([0.0, 0.0, 1.0])
+        cR = obj0 + np.array([0.0, -hy, 0.0])
+        cL = obj0 + np.array([0.0, +hy, 0.0])
+        aboveR = cR + 0.08 * up
+        aboveL = cL + 0.08 * up
+
+        armA = {"R": self.ik_side_to("R", aboveR),
+                "L": self.ik_side_to("L", aboveL)}
+        armC = {"R": self.ik_side_to("R", cR),
+                "L": self.ik_side_to("L", cL)}
+        # Sweep direction: R hand sweeps +x, L hand sweeps -x. Empirically the
+        # box yaws in the -z direction with this combo in env physics (the
+        # opposite of the naive torque-couple intuition — frictional contact
+        # dynamics outweigh the abstract couple). With ref obj_quat ramping
+        # 0 -> -yaw_deg to match, the kinematic playback and env replay agree
+        # in direction.
+        sweep_arms = []
+        for k in range(n_sweep + 1):
+            frac = k / n_sweep
+            sweep_arms.append({
+                "R": self.ik_side_to("R", cR + np.array([+sweep_dx * frac, 0, 0])),
+                "L": self.ik_side_to("L", cL + np.array([-sweep_dx * frac, 0, 0]))})
+
+        # Teleport to approach pose so seg's "start" matches env's reset state.
+        approach_full = self._assemble(armA, {s: dict(SCOOP) for s in self.sides})
+        self.d.qpos[self.env._jnt_qposadr] = approach_full
+        self.d.ctrl[self.env._act_ctrl_idx] = approach_full
+        mujoco.mj_forward(self.m, self.d)
+
+        f_scoop = {s: dict(SCOOP) for s in self.sides}
+        ang = np.radians(yaw_deg)
+        # yaw quaternion around z, interpolated from identity to full yaw
+        def yawq(a):
+            return np.array([np.cos(a / 2), 0.0, 0.0, np.sin(a / 2)])
+
+        def lerp(a, b, s): return (1 - s) * np.asarray(a) + s * np.asarray(b)
+        def smooth(s): return 3 * s ** 2 - 2 * s ** 3
+
+        def seg(aA, aB, fA, fB, oA, oB, qA, qB, n):
+            for k in range(n):
+                s = smooth((k + 1) / n)
+                arms = {sd: lerp(aA[sd], aB[sd], s) for sd in self.sides}
+                figs = {sd: {suf: (1 - s) * fA[sd][suf] + s * fB[sd][suf]
+                             for suf in fA[sd]} for sd in self.sides}
+                pose = self._assemble(arms, figs)
+                self.rec_q.append(pose)
+                self.rec_ctrl.append(pose.copy())
+                self.rec_op.append(lerp(oA, oB, s))
+                # slerp two unit quats (small-angle so lerp+normalize is fine)
+                q = (1 - s) * qA + s * qB
+                q = q / (np.linalg.norm(q) + 1e-9)
+                self.rec_oq.append(q)
+
+        q_id = yawq(0.0)
+        q_end = yawq(ang)
+
+        # settle (above box)
+        seg(armA, armA, f_scoop, f_scoop, obj0, obj0, q_id, q_id, 15)
+        # descend to face contact (obj static, identity quat)
+        seg(armA, armC, f_scoop, f_scoop, obj0, obj0, q_id, q_id, 50)
+        # tangential sweep: hands move outward, OBJECT YAWS kinematically.
+        for k in range(n_sweep):
+            qa = yawq(ang * k / n_sweep)
+            qb = yawq(ang * (k + 1) / n_sweep)
+            seg(sweep_arms[k], sweep_arms[k + 1], f_scoop, f_scoop,
+                obj0, obj0, qa, qb, 8)
+        # hold
+        seg(sweep_arms[-1], sweep_arms[-1], f_scoop, f_scoop,
+            obj0, obj0, q_end, q_end, 15)
+        return self.obj_pos() - obj0
+
     def generate_reorient(self, sweep_dx=0.06, n_sweep=24):
         """BIMANUAL cooperative reorient: both hands contact opposite ±y faces of
         a central box and sweep TANGENTIALLY in *opposite* x directions while
@@ -746,7 +830,8 @@ def main():
     ap.add_argument("--side", default="R")
     ap.add_argument("--task", default="push",
                     choices=["push", "lift", "lift_ref", "reorient",
-                             "bim_lift", "bim_reorient", "bim_handover"])
+                             "bim_lift", "bim_reorient", "bim_reorient_k",
+                             "bim_handover"])
     args = ap.parse_args()
 
     if args.task == "bim_handover":
@@ -761,6 +846,17 @@ def main():
               f"total moved {moved:.1f}cm  -> {args.out}")
         if obj_dy < 10 or obj_dz < 5:
             print("[make_demo] WARNING: short on push or lift — handover incomplete.")
+        return
+
+    if args.task == "bim_reorient_k":
+        gen = BimanualDemoGen(**BIM_REORIENT_BOX)
+        gen.generate_reorient_kinematic()
+        traj = gen.save(args.out)
+        def yaw(q): return np.degrees(2 * np.arctan2(q[3], q[0]))
+        dyaw = yaw(traj.obj_quat[-1]) - yaw(traj.obj_quat[0])
+        print(f"[make_demo] task=bim_reorient_k frames={traj.n_frames} dur={traj.duration:.2f}s "
+              f"action_dim={gen.env.action_dim}  yaw change {dyaw:+.0f} deg "
+              f"(kinematic target)  -> {args.out}")
         return
 
     if args.task == "bim_reorient":

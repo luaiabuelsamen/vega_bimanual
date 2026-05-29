@@ -35,14 +35,15 @@ side is partial (env-vs-demo replay diverges for chained drive_to demos, a
 separate bug from the RL plateau).*
 
 <p align="center">
-  <img src="media/bim_reorient.gif" width="420" alt="Two Vega f5d6 hands cooperatively yawing a box ~111° (nonprehensile couple)"/>
+  <img src="media/bim_reorient_policy.gif" width="420" alt="Trained bimanual policy yawing a box ~57°"/>
 </p>
 
-*A second bimanual task — **cooperative reorient**: both hands contact the box's
-opposite ±y faces and sweep tangentially in **opposite** x directions. The two
-opposing tangential drags form a couple about z, yawing the box **+111°**.
-Nonprehensile (no force closure needed), so it doesn't depend on the marginal
-friction grip that limits the lift.*
+*A second **trained-policy** result — **cooperative reorient**: both hands
+contact the box's opposite ±y faces and sweep tangentially in opposite x
+directions; the friction drag yaws the box **+57°** on the table. Nonprehensile
+(no force closure needed), so it doesn't have the grip-margin problem that
+limits the lift. Same BC recipe as the lift policy — clone the open-loop
+zero-residual rollout of a kinematic seg-loop reference.*
 
 <p align="center">
   <img src="media/reorient.gif" width="320" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
@@ -96,7 +97,8 @@ manipulation.
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
 | **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
 | **Bimanual squeeze-and-lift** (BC-trained policy, +21 cm) | ✅ trained NN actor matches open-loop |
-| **Bimanual cooperative reorient** (physics couple, +111° yaw) | ✅ two hands yaw a box on the table |
+| **Bimanual cooperative reorient** (open-loop physics couple) | ✅ scripted demo, +111° yaw |
+| **Bimanual cooperative reorient** (BC-trained policy) | ✅ NN policy, +57° yaw |
 | **Bimanual handover** (R-push -> bimanual lift, two-phase) | ✅ scripted demo (10 s composition) |
 | **BC push policy** (single-arm) | ✅ NN policy reproduces 11.6 cm push |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
@@ -124,6 +126,13 @@ PYTHONPATH=. python scripts/make_demo.py --task bim_handover --out demos/bim_han
 
 # bimanual cooperative reorient (couple yaws the box ~111°)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient --out demos/bim_reorient_box.npz
+
+# kinematic-seg version of bimanual reorient (env replay reproduces a +57° yaw)
+PYTHONPATH=. python scripts/make_demo.py --task bim_reorient_k --out demos/bim_reorient_k_box.npz
+# BC train a policy on it
+PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_reorient_k_box.npz --sides R,L \
+    --obj-type box --obj-mass 0.1 --obj-dims 0.045,0.045,0.06 \
+    --obj-pos 0.55,0.0,0.80 --epochs 400 --out runs/bim_reorient_bc/ckpt.pt
 
 # bimanual cooperative squeeze-and-lift reference (36-DoF, two arms)
 PYTHONPATH=. python scripts/make_demo.py --task bim_lift --out demos/bim_lift_box.npz
