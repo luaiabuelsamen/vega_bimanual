@@ -520,37 +520,34 @@ class BimanualDemoGen:
                 {"R": dict(fingers_R),
                  "L": dict(fingers_L if fingers_L is not None else OPEN)})
 
-        # Teleport arms to the approach pose before recording: otherwise the
-        # transition from the all-zero reset pose to the approach pose sweeps
-        # the R arm through the box's location and knocks it off the table.
+        # Teleport arms to the approach pose so the recording starts with arms
+        # already positioned (otherwise transit through the box knocks it off).
         approach_full = tgt(arm_R_above, OPEN)
         self.d.qpos[self.env._jnt_qposadr] = approach_full
         self.d.ctrl[self.env._act_ctrl_idx] = approach_full
         mujoco.mj_forward(self.m, self.d)
-        L_init = self.d.qpos[self.arm_qadr["L"]].copy()  # re-capture L after teleport
-        # settle (record so the start has a few flat frames)
+        L_init = self.d.qpos[self.arm_qadr["L"]].copy()
+        # Phase 1 is physics-driven drive_to (single-hand push with SCOOP only
+        # reliably translates into physics push when the orientation comes from
+        # actual ctrl, not from interpolated kinematic poses). Env replay of
+        # this phase achieves ~38% of the demo's push (8cm vs 21cm) — see the
+        # env-replay-divergence bug logged in memory.
         self.drive_to(tgt(arm_R_above, SCOOP), n=15)
-        # R approach above contact (already there; close fingers to SCOOP)
         self.drive_to(tgt(arm_R_above, SCOOP), n=40)
-        # R descend to face
         self.drive_to(tgt(arm_R_contact, SCOOP), n=45)
-        # R sweep +y in small constant-z waypoints (like the single-arm push)
         n_push = 22
         for k in range(n_push):
             frac = (k + 1) / n_push
             arm_R_step = self.ik_side_to("R", contact_R + frac * push_v)
             self.drive_to(tgt(arm_R_step, SCOOP), n=6, blend=False)
-        # R retreats up & away so it doesn't collide with the bimanual approach
         post_R = contact_R + push_v + np.array([0.0, -0.04, 0.12])
         arm_R_retreat = self.ik_side_to("R", post_R)
         self.drive_to(tgt(arm_R_retreat, OPEN), n=40)
 
         # --- phase 2: bimanual squeeze-and-lift around the now-centred box ---
-        # Switch to the kinematic seg-loop pattern used by generate_squeeze_lift:
-        # records the IDEAL interpolated pose as both qpos AND ctrl, so the env's
-        # ctrl-replay reproduces the +21 cm lift. The drive_to physics-driven
-        # version of the lift only achieves ~4 cm — the grip is marginal and the
-        # kinematic ideal-target ctrl drives the arms more aggressively.
+        # Kinematic seg-loop pattern (like generate_squeeze_lift): records the
+        # ideal interpolated pose as both qpos AND ctrl so the env's ctrl-replay
+        # reproduces the +21 cm lift behaviour. Starts at the physical obj_now.
         obj_now = self.obj_pos()
         objq_now = self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy()
         cR = obj_now + np.array([0.0, -hy, 0.0])
@@ -574,14 +571,10 @@ class BimanualDemoGen:
         def lerp(a, b, s): return (1 - s) * np.asarray(a) + s * np.asarray(b)
         def smooth(s): return 3 * s ** 2 - 2 * s ** 3
 
-        # Bridge: arms are currently at arm_R_retreat (R) and L_init (L). The
-        # seg loop interpolates from one keypose to the next, starting at "armA
-        # above box" — but the arms aren't there yet. Need to drive arms to
-        # armA first (physics-driven, smooth) before switching to kinematic.
-        cur_R = self.d.qpos[self.arm_qadr["R"]].copy()
-        cur_L = self.d.qpos[self.arm_qadr["L"]].copy()
+        # Bridge: drive arms (physics) to the bimanual approach pose (armA),
+        # then switch to kinematic seg-loop for the lift.
         approach_armA = self._assemble(armA, f_open)
-        self.drive_to(approach_armA, n=60)  # physics-drive to bim approach pose
+        self.drive_to(approach_armA, n=60)
 
         def seg(aA, aB, fA, fB, oA, oB, n):
             for k in range(n):
@@ -595,7 +588,7 @@ class BimanualDemoGen:
                 self.rec_op.append(lerp(oA, oB, s))
                 self.rec_oq.append(objq_now)
 
-        # kinematic squeeze-and-lift around the (now physical) box position
+        # kinematic squeeze-and-lift around the (physical) current box position
         seg(armA, armA, f_open, f_open, obj_now, obj_now, 15)
         seg(armA, armC, f_open, f_open, obj_now, obj_now, 40)
         seg(armC, armC, f_open, f_sq, obj_now, obj_now, 30)
