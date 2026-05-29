@@ -42,6 +42,7 @@ class VegaTrackingEnv:
         obj_pos: tuple[float, float, float] = (0.6, -0.15, 0.80),
         obj_mass: float = 0.08,
         obj_friction: str = "2.0 0.05 0.002",
+        w_lift_bonus: float = 0.0,
         rebuild: bool = True,
     ):
         # `sides` (list) drives single- vs bi-manual; `side` (str) kept for the
@@ -52,7 +53,7 @@ class VegaTrackingEnv:
         self.side = self.sides[0]
         self.ref_horizon = ref_horizon
         self.rng = np.random.default_rng(seed)
-        self.weights = weights or rw.RewardWeights()
+        self.weights = weights or rw.RewardWeights(w_lift_bonus=w_lift_bonus)
 
         # --- model / data ---
         # `rebuild=False` skips regenerating the shared scene XML — used by the
@@ -230,6 +231,8 @@ class VegaTrackingEnv:
             obj_quat=obj_quat, obj_quat_ref=ref["obj_quat"],
             hand_qpos=qpos, hand_qpos_ref=ref["hand_qpos"],
             fingertips=fingertips, fingertips_ref=self._ref_fingertips_at(self.t),
+            obj_pos_actual=obj_pos,
+            obj_pos_start=self.ref.obj_pos[0],
             action=action, torque=torque,
             state=self._reward_state, w=self.weights,
         )

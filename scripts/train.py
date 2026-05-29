@@ -53,6 +53,16 @@ def parse_args():
     p.add_argument("--max-grad-norm", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--cpu", action="store_true", help="force CPU")
+    p.add_argument("--w-lift-bonus", type=float, default=0.0,
+                   help="dense reward weight for box height above start. Turn "
+                        "on (e.g. 5.0) for lift tasks where the sharp obj_pos "
+                        "kernel gives near-zero gradient on the lift phase.")
+    p.add_argument("--init-logstd", type=float, default=-0.5,
+                   help="initial action log-std. Lower = tighter exploration. "
+                        "For contact-rich bimanual where the open-loop "
+                        "reference already succeeds, e.g. -2.0 keeps early "
+                        "rollouts near the success basin so PPO refines from "
+                        "there instead of discovering a 'don't grip' optimum.")
     return p.parse_args()
 
 
@@ -83,11 +93,19 @@ def main():
         obj_kwargs["obj_pos"] = tuple(float(x) for x in args.obj_pos.split(","))
     if args.obj_friction:
         obj_kwargs["obj_friction"] = args.obj_friction
+    if args.w_lift_bonus:
+        obj_kwargs["w_lift_bonus"] = args.w_lift_bonus
     envs = make_vec_env(args.vec, num_envs=args.num_envs, seed=args.seed,
                         sides=sides, ref=ref, **obj_kwargs)
     print(f"[train] vec={args.vec} num_envs={args.num_envs} obj={obj_kwargs}")
     obs_dim, act_dim = envs.obs_dim, envs.action_dim
     agent = ActorCritic(obs_dim, act_dim).to(device)
+    # Override initial action log-std (default -0.5). The default produces
+    # std ~ 0.6, wide enough that bimanual exploration knocks the box off
+    # before PPO sees the grip reward.
+    with torch.no_grad():
+        agent.actor_logstd.fill_(args.init_logstd)
+    print(f"[train] init logstd={args.init_logstd} (std~{np.exp(args.init_logstd):.3f})")
     opt = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
 
     N, T = args.num_envs, args.rollout_steps

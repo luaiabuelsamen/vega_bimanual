@@ -6,16 +6,21 @@
 > bimanual as the goal.
 
 <p align="center">
-  <img src="media/bim_lift.gif" width="520" alt="Two Vega f5d6 hands cooperatively lifting a box off the table"/>
+  <img src="media/bim_lift_policy.gif" width="520" alt="Trained bimanual policy lifting a box +21 cm off the table"/>
 </p>
 
-*Above: a bimanual cooperative squeeze-and-lift, executed **open-loop in full
-physics** (no kinematic locking) — the two f5d6 hands press opposite faces of a
-box and lift it ~21 cm off the table, held purely by inter-hand friction. This is
-the one manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the
+*Above: a **trained neural-network policy** driving two Vega f5d6 hands to squeeze
+and lift a box **+21 cm off the table**, held by inter-hand friction. This is the
+one manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the
 fingers closer than ~3.1 cm); the second hand provides the missing object
-opposition. f5d6's weak opposition caps the liftable mass — the squeeze holds a
-0.05 kg box but slips on 0.12 kg.*
+opposition. Trained by **behavior cloning** of the open-loop zero-residual
+rollout — four PPO configurations all converged to a `~+4 cm` "don't grip"
+local optimum, because action noise that's large enough for PPO to learn from
+is also large enough to break the marginal friction grip. The kinematic
+reference is feasible in physics, so the optimal residual policy is one that
+tracks the reference exactly; BC finds that policy directly. f5d6's weak
+opposition caps the liftable mass — the squeeze holds a 0.05 kg box but slips
+on 0.12 kg.*
 
 <p align="center">
   <img src="media/bim_reorient.gif" width="420" alt="Two Vega f5d6 hands cooperatively yawing a box ~111° (nonprehensile couple)"/>
@@ -78,9 +83,10 @@ manipulation.
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
 | **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
+| **Bimanual squeeze-and-lift** (BC-trained policy, +21 cm) | ✅ trained NN actor matches open-loop |
 | **Bimanual cooperative reorient** (physics couple, +111° yaw) | ✅ two hands yaw a box on the table |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
-| Bimanual *RL tracker* matching the open-loop lift | 🚧 partial (policy lifts ~4 cm; bottleneck is exploration, not physics — friction probe at 2×/5× had no effect) |
+| Bimanual *PPO* matching the BC lift | 🚧 4 configurations all collapsed to ~+4 cm; structurally hard for vanilla PPO |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
 | Parallel sim (mujoco_warp) for throughput | 🚧 |
 
@@ -114,6 +120,16 @@ MUJOCO_GL=egl PYTHONPATH=. python scripts/render_gif.py \
 PYTHONPATH=. python scripts/train.py --ref demos/bim_lift_box.npz --sides R,L \
     --vec process --num-envs 12 --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \
     --obj-pos 0.55,0.0,0.80 --total-steps 800000
+
+# behavior-clone a residual policy from the (already-feasible) zero-residual
+# rollout — yields a trained NN policy that lifts the box +21 cm
+PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_lift_box.npz --sides R,L \
+    --obj-type box --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \
+    --obj-pos 0.55,0.0,0.80 --epochs 400 --out runs/bim_lift_bc/ckpt.pt
+MUJOCO_GL=egl PYTHONPATH=. python scripts/render_gif.py \
+    --ref demos/bim_lift_box.npz --sides R,L --ckpt runs/bim_lift_bc/ckpt.pt \
+    --obj-type box --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 --obj-pos 0.55,0.0,0.80 \
+    --out media/bim_lift_policy.gif
 
 # train the tracker on it
 PYTHONPATH=. python scripts/train.py --ref demos/reorient_box.npz --total-steps 250000
