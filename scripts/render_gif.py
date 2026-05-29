@@ -58,16 +58,16 @@ def main():
     m, d = env.model, env.data
 
     cam = mujoco.MjvCamera()
-    if len(sides) > 1:  # bimanual: object on midline; oblique 3/4 so both arms
-        cam.lookat[:] = [0.5, 0.0, 0.9]   # show (azimuth 90 collapses them)
-        cam.distance = 1.5
-        cam.azimuth = 35
-        cam.elevation = -20
+    if len(sides) > 1:  # bimanual: side-on near the box so vertical motion reads
+        cam.lookat[:] = [0.55, 0.0, 0.93]
+        cam.distance = 0.7
+        cam.azimuth = 10
+        cam.elevation = -8
     else:
-        cam.lookat[:] = [0.58, -0.15, 0.82]
-        cam.distance = 1.3
-        cam.azimuth = 140
-        cam.elevation = -22
+        cam.lookat[:] = [0.58, -0.15, 0.85]
+        cam.distance = 0.7
+        cam.azimuth = 135
+        cam.elevation = -18
 
     frames = []
     with mujoco.Renderer(m, height=args.h, width=args.w) as r:

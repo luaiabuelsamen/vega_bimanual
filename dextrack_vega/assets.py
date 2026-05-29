@@ -147,18 +147,28 @@ def build_scene(
 {_indent(default, 4)}
   </default>
 
+  <visual>
+    <headlight ambient="0.4 0.4 0.4" diffuse="0.6 0.6 0.6" specular="0.0 0.0 0.0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global offwidth="1280" offheight="960" elevation="-20" azimuth="120"/>
+  </visual>
+
   <asset>
 {_indent(asset, 4)}
-    <texture name="grid" type="2d" builtin="checker" rgb1="0.2 0.3 0.4"
-             rgb2="0.1 0.15 0.2" width="300" height="300"/>
-    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.1"/>
+    <texture name="skybox" type="skybox" builtin="gradient"
+             rgb1="0.30 0.35 0.45" rgb2="0.05 0.07 0.10" width="512" height="512"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.55 0.55 0.55"
+             rgb2="0.40 0.40 0.40" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="6 6" reflectance="0.05"/>
   </asset>
 
   <worldbody>
-    <light pos="0 0 3" dir="0 0 -1" diffuse="0.8 0.8 0.8"/>
+    <light name="top"    pos="0.5 0.0 2.5" dir="0 0 -1" diffuse="0.7 0.7 0.7" specular="0.0 0.0 0.0"/>
+    <light name="frontL" pos="1.2 0.6 1.3" dir="-0.6 -0.3 -0.5" diffuse="0.45 0.45 0.45"/>
+    <light name="frontR" pos="1.2 -0.6 1.3" dir="-0.6  0.3 -0.5" diffuse="0.45 0.45 0.45"/>
     <geom name="floor" type="plane" size="5 5 0.1" material="grid"/>
     <body name="table" pos="0.3 0 {table_z}">
-      <geom name="table_top" type="box" size="0.55 0.4 0.02" rgba="0.6 0.5 0.4 1"/>
+      <geom name="table_top" type="box" size="0.55 0.4 0.02" rgba="0.78 0.65 0.50 1"/>
     </body>
     <camera name="track" pos="1.4 -1.0 1.6" xyaxes="0.7 0.7 0 -0.4 0.4 0.8"/>
 {_indent(worldbody, 4)}
