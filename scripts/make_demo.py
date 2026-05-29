@@ -485,6 +485,128 @@ class BimanualDemoGen:
             for _ in range(C.CONTROL_DECIMATION):
                 mujoco.mj_step(self.m, self.d)
 
+    def generate_handover(self, push_dy=0.18, lift_h=0.15):
+        """BIMANUAL HANDOVER (two-phase coordination):
+           1) R hand alone pushes the box from one side of the table to the
+              midline (the L hand can't reach the start position).
+           2) Both hands then squeeze-lift it together.
+
+        Two arms playing two genuinely different roles. Physics-driven via
+        drive_to so hand_ctrl is recorded; the BC pipeline can clone it
+        afterwards. Requires the box to start off-midline (use HANDOVER_BOX
+        preset which spawns at y=-0.18)."""
+        self.reset()
+        obj0 = self.obj_pos()
+        gid = mujoco.mj_name2id(self.m, mujoco.mjtObj.mjOBJ_GEOM, "object_geom")
+        hy = float(self.m.geom_size[gid][1])
+        up = np.array([0.0, 0.0, 1.0])
+        push_v = np.array([0.0, push_dy, 0.0])
+
+        # L stays at its reset pose throughout phase 1 (out of the way).
+        L_init = self.d.qpos[self.arm_qadr["L"]].copy()
+
+        # --- phase 1: R alone pushes box from obj0 to obj0 + push_v ---
+        # Contact point on the -y face of the box (R hand pushes from behind in
+        # -y, sweeping in +y to drive box toward the midline).
+        contact_R = obj0 + np.array([0.0, -(hy + 0.02), 0.0])
+        above_R = contact_R + 0.18 * up   # high enough to clear the box top
+
+        arm_R_above = self.ik_side_to("R", above_R)
+        arm_R_contact = self.ik_side_to("R", contact_R)
+
+        def tgt(armR, fingers_R, armL=None, fingers_L=None):
+            return self._assemble(
+                {"R": armR, "L": armL if armL is not None else L_init},
+                {"R": dict(fingers_R),
+                 "L": dict(fingers_L if fingers_L is not None else OPEN)})
+
+        # Teleport arms to the approach pose before recording: otherwise the
+        # transition from the all-zero reset pose to the approach pose sweeps
+        # the R arm through the box's location and knocks it off the table.
+        approach_full = tgt(arm_R_above, OPEN)
+        self.d.qpos[self.env._jnt_qposadr] = approach_full
+        self.d.ctrl[self.env._act_ctrl_idx] = approach_full
+        mujoco.mj_forward(self.m, self.d)
+        L_init = self.d.qpos[self.arm_qadr["L"]].copy()  # re-capture L after teleport
+        # settle (record so the start has a few flat frames)
+        self.drive_to(tgt(arm_R_above, SCOOP), n=15)
+        # R approach above contact (already there; close fingers to SCOOP)
+        self.drive_to(tgt(arm_R_above, SCOOP), n=40)
+        # R descend to face
+        self.drive_to(tgt(arm_R_contact, SCOOP), n=45)
+        # R sweep +y in small constant-z waypoints (like the single-arm push)
+        n_push = 22
+        for k in range(n_push):
+            frac = (k + 1) / n_push
+            arm_R_step = self.ik_side_to("R", contact_R + frac * push_v)
+            self.drive_to(tgt(arm_R_step, SCOOP), n=6, blend=False)
+        # R retreats up & away so it doesn't collide with the bimanual approach
+        post_R = contact_R + push_v + np.array([0.0, -0.04, 0.12])
+        arm_R_retreat = self.ik_side_to("R", post_R)
+        self.drive_to(tgt(arm_R_retreat, OPEN), n=40)
+
+        # --- phase 2: bimanual squeeze-and-lift around the now-centred box ---
+        # Switch to the kinematic seg-loop pattern used by generate_squeeze_lift:
+        # records the IDEAL interpolated pose as both qpos AND ctrl, so the env's
+        # ctrl-replay reproduces the +21 cm lift. The drive_to physics-driven
+        # version of the lift only achieves ~4 cm — the grip is marginal and the
+        # kinematic ideal-target ctrl drives the arms more aggressively.
+        obj_now = self.obj_pos()
+        objq_now = self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy()
+        cR = obj_now + np.array([0.0, -hy, 0.0])
+        cL = obj_now + np.array([0.0, +hy, 0.0])
+        aboveR = cR + 0.08 * up
+        aboveL = cL + 0.08 * up
+        armA = {"R": self.ik_side_to("R", aboveR),
+                "L": self.ik_side_to("L", aboveL)}
+        armC = {"R": self.ik_side_to("R", cR),
+                "L": self.ik_side_to("L", cL)}
+        n_lift = 5
+        lift_arms = []
+        for i in range(1, n_lift + 1):
+            dz = lift_h * i / n_lift
+            lift_arms.append((i / n_lift, {
+                "R": self.ik_side_to("R", cR + dz * up),
+                "L": self.ik_side_to("L", cL + dz * up)}))
+        f_open = {s: dict(OPEN) for s in self.sides}
+        f_sq = {s: dict(SQUEEZE) for s in self.sides}
+
+        def lerp(a, b, s): return (1 - s) * np.asarray(a) + s * np.asarray(b)
+        def smooth(s): return 3 * s ** 2 - 2 * s ** 3
+
+        # Bridge: arms are currently at arm_R_retreat (R) and L_init (L). The
+        # seg loop interpolates from one keypose to the next, starting at "armA
+        # above box" — but the arms aren't there yet. Need to drive arms to
+        # armA first (physics-driven, smooth) before switching to kinematic.
+        cur_R = self.d.qpos[self.arm_qadr["R"]].copy()
+        cur_L = self.d.qpos[self.arm_qadr["L"]].copy()
+        approach_armA = self._assemble(armA, f_open)
+        self.drive_to(approach_armA, n=60)  # physics-drive to bim approach pose
+
+        def seg(aA, aB, fA, fB, oA, oB, n):
+            for k in range(n):
+                s = smooth((k + 1) / n)
+                arms = {sd: lerp(aA[sd], aB[sd], s) for sd in self.sides}
+                figs = {sd: {suf: (1 - s) * fA[sd][suf] + s * fB[sd][suf]
+                             for suf in fA[sd]} for sd in self.sides}
+                pose = self._assemble(arms, figs)
+                self.rec_q.append(pose)
+                self.rec_ctrl.append(pose.copy())
+                self.rec_op.append(lerp(oA, oB, s))
+                self.rec_oq.append(objq_now)
+
+        # kinematic squeeze-and-lift around the (now physical) box position
+        seg(armA, armA, f_open, f_open, obj_now, obj_now, 15)
+        seg(armA, armC, f_open, f_open, obj_now, obj_now, 40)
+        seg(armC, armC, f_open, f_sq, obj_now, obj_now, 30)
+        prev_arm, prev_o = armC, obj_now
+        for frac, arm in lift_arms:
+            o = obj_now + frac * lift_h * up
+            seg(prev_arm, arm, f_sq, f_sq, prev_o, o, 14)
+            prev_arm, prev_o = arm, o
+        seg(prev_arm, prev_arm, f_sq, f_sq, prev_o, prev_o, 15)
+        return self.obj_pos() - obj0
+
     def generate_reorient(self, sweep_dx=0.06, n_sweep=24):
         """BIMANUAL cooperative reorient: both hands contact opposite ±y faces of
         a central box and sweep TANGENTIALLY in *opposite* x directions while
@@ -618,6 +740,12 @@ BIM_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07), obj_pos=(0.55, 0.0,
 BIM_REORIENT_BOX = dict(obj_type="box", obj_dims=(0.045, 0.045, 0.06),
                         obj_pos=(0.55, 0.0, 0.80), obj_mass=0.1)
 
+# Handover preset: same box as BIM_BOX but spawned off-midline (y=-0.18) so the
+# L hand can't reach the start position. R hand has to deliver the box to the
+# midline before the bimanual lift becomes feasible.
+HANDOVER_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07),
+                    obj_pos=(0.55, -0.18, 0.80), obj_mass=0.05)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -625,8 +753,22 @@ def main():
     ap.add_argument("--side", default="R")
     ap.add_argument("--task", default="push",
                     choices=["push", "lift", "lift_ref", "reorient",
-                             "bim_lift", "bim_reorient"])
+                             "bim_lift", "bim_reorient", "bim_handover"])
     args = ap.parse_args()
+
+    if args.task == "bim_handover":
+        gen = BimanualDemoGen(**HANDOVER_BOX)
+        disp = gen.generate_handover()
+        traj = gen.save(args.out)
+        obj_dz = (traj.obj_pos[-1] - traj.obj_pos[0])[2] * 100
+        obj_dy = (traj.obj_pos[-1] - traj.obj_pos[0])[1] * 100
+        moved = float(np.linalg.norm(disp)) * 100
+        print(f"[make_demo] task=bim_handover frames={traj.n_frames} dur={traj.duration:.2f}s "
+              f"action_dim={gen.env.action_dim}  push +y {obj_dy:+.1f}cm  lift {obj_dz:+.1f}cm  "
+              f"total moved {moved:.1f}cm  -> {args.out}")
+        if obj_dy < 10 or obj_dz < 5:
+            print("[make_demo] WARNING: short on push or lift — handover incomplete.")
+        return
 
     if args.task == "bim_reorient":
         gen = BimanualDemoGen(**BIM_REORIENT_BOX)

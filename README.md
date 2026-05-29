@@ -23,6 +23,18 @@ opposition caps the liftable mass — the squeeze holds a 0.05 kg box but slips
 on 0.12 kg.*
 
 <p align="center">
+  <img src="media/bim_handover.gif" width="480" alt="Bimanual handover: R hand pushes box to midline, both hands then lift it"/>
+</p>
+
+*A **bimanual handover** — two arms playing two genuinely different roles.
+**Phase 1**: the R hand alone pushes the box from its off-midline spawn (y = -18 cm,
+unreachable by the L hand) to the midline. **Phase 2**: both hands approach the
+now-centred box, squeeze it between opposite faces, and lift it together. The
+demo records the full ~10-second multi-phase trajectory in physics; the policy
+side is partial (env-vs-demo replay diverges for chained drive_to demos, a
+separate bug from the RL plateau).*
+
+<p align="center">
   <img src="media/bim_reorient.gif" width="420" alt="Two Vega f5d6 hands cooperatively yawing a box ~111° (nonprehensile couple)"/>
 </p>
 
@@ -85,6 +97,8 @@ manipulation.
 | **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
 | **Bimanual squeeze-and-lift** (BC-trained policy, +21 cm) | ✅ trained NN actor matches open-loop |
 | **Bimanual cooperative reorient** (physics couple, +111° yaw) | ✅ two hands yaw a box on the table |
+| **Bimanual handover** (R-push -> bimanual lift, two-phase) | ✅ scripted demo (10 s composition) |
+| **BC push policy** (single-arm) | ✅ NN policy reproduces 11.6 cm push |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
 | Bimanual *PPO* matching the BC lift | 🚧 4 configurations all collapsed to ~+4 cm; structurally hard for vanilla PPO |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
@@ -104,6 +118,9 @@ naturally to two-arm cooperative manipulation.
 ```bash
 # generate a reference demo
 PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_box.npz
+
+# bimanual handover (R pushes to midline, then both lift)
+PYTHONPATH=. python scripts/make_demo.py --task bim_handover --out demos/bim_handover_box.npz
 
 # bimanual cooperative reorient (couple yaws the box ~111°)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient --out demos/bim_reorient_box.npz
