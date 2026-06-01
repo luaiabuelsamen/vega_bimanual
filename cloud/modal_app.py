@@ -31,7 +31,9 @@ C_DEXMATE = f"{C_PROJECTS}/dexmate/dexmate-urdf"
 # had an nvidia-cuda-nvcc namespace-package import bug.
 _MOUNTS = lambda img: (
     img
-    .add_local_dir(str(REPO), C_REPO, ignore=["~*", ".venv", ".git", "runs", "media", "*.log"])
+    .add_local_dir(str(REPO), C_REPO,
+                   ignore=["~*", ".venv", ".git", "runs", "media", "cloud",
+                           "*.log", "**/*.log"])
     .add_local_dir(str(DEXMATE), C_DEXMATE)
 )
 

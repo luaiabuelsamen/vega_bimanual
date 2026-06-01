@@ -19,10 +19,16 @@ from .. import assets
 from .. import config as C
 
 
+def _safe_norm(x, axis=-1):
+    """Euclidean norm with a finite gradient at 0 (plain norm has a NaN grad)."""
+    return jnp.sqrt(jnp.sum(x * x, axis=axis) + 1e-12)
+
+
 def _quat_geodesic_angle(q1, q2):
-    """Angle (rad) between two unit quaternions (wxyz)."""
+    """Angle (rad) between two unit quaternions (wxyz). Clipped below 1 so
+    arccos keeps a finite gradient (its derivative is infinite at d=1)."""
     d = jnp.abs(jnp.sum(q1 * q2, axis=-1))
-    d = jnp.clip(d, 0.0, 1.0)
+    d = jnp.clip(d, 0.0, 1.0 - 1e-7)
     return 2.0 * jnp.arccos(d)
 
 
@@ -216,9 +222,14 @@ class MjxTrackingEnv(Env):
 
         # done = true termination only (object dropped). The episode time limit
         # is left to brax's EpisodeWrapper, which marks it as a truncation so the
-        # value function keeps bootstrapping past it.
+        # value function keeps bootstrapping past it. Also terminate if the sim
+        # goes non-finite in any env (rare GPU-float32 blowup) so one bad env
+        # can't poison the whole batch with NaN; clamp obs/reward to stay finite.
         obj_z = data.qpos[self._obj_qadr + 2]
-        done = (obj_z < 0.3)
+        nonfinite = jnp.logical_not(jnp.all(jnp.isfinite(data.qpos)))
+        done = jnp.logical_or(obj_z < 0.3, nonfinite)
+        obs = jnp.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
+        reward = jnp.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Merge (don't replace) info/metrics — brax's wrappers add their own
         # carry keys and the rollout scan requires the carry structure preserved.
@@ -266,11 +277,11 @@ class MjxTrackingEnv(Env):
         qpos = data.qpos[self._jnt_qadr]
         ftips = data.xpos[self._ft_bids]
 
-        pos_err = jnp.linalg.norm(obj_pos - op_ref)
+        pos_err = _safe_norm(obj_pos - op_ref)
         rot_err = _quat_geodesic_angle(obj_quat, oq_ref)
         qpos_err = jnp.mean((qpos - hq_ref) ** 2)
-        ft_err = jnp.mean(jnp.linalg.norm(ftips - ftref, axis=-1))
-        grip_err = jnp.mean(jnp.linalg.norm(ftips - obj_pos[None, :], axis=-1))
+        ft_err = jnp.mean(_safe_norm(ftips - ftref, axis=-1))
+        grip_err = jnp.mean(_safe_norm(ftips - obj_pos[None, :], axis=-1))
 
         r = (kw["w_obj_pos"] * jnp.exp(-kw["k_obj_pos"] * pos_err)
              + kw["w_obj_rot"] * jnp.exp(-kw["k_obj_rot"] * rot_err)

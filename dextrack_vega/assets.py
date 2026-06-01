@@ -90,19 +90,49 @@ def _convert_cylinders_to_boxes(mjcf: str) -> str:
     return mjcf
 
 
-def _simplify_collision(mjcf: str, sides: list[str], ftip_radius: float = 0.008) -> str:
+def _fingertip_capsules(sides: list[str]) -> dict:
+    """Per-fingertip capsule (body-frame fromto + radius) covering the ~5cm
+    distal finger link, derived from the URDF collision mesh. A point sphere at
+    the joint origin (what we used first) never reaches the object; a capsule
+    spanning the finger does."""
+    import numpy as np
+    m = mujoco.MjModel.from_xml_string(
+        build_scene(sides=sides, collision="mesh", write=False))
+    ftips = {b for s in sides for b in C.FINGERTIP_BODIES[s]}
+    out = {}
+    for g in range(m.ngeom):
+        if m.geom_type[g] != mujoco.mjtGeom.mjGEOM_MESH:
+            continue
+        bname = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, m.geom_bodyid[g])
+        if bname not in ftips:
+            continue
+        mid = m.geom_dataid[g]
+        v = m.mesh_vert[m.mesh_vertadr[mid]:m.mesh_vertadr[mid] + m.mesh_vertnum[mid]].reshape(-1, 3)
+        # mesh verts -> body frame via the geom pose
+        quat = m.geom_quat[g]; rot = np.zeros(9)
+        mujoco.mju_quat2Mat(rot, quat); rot = rot.reshape(3, 3)
+        vb = (v @ rot.T) + m.geom_pos[g]
+        axis = int(np.argmax(vb.max(0) - vb.min(0)))         # finger long axis
+        lo = vb[vb[:, axis].argmin()]; hi = vb[vb[:, axis].argmax()]
+        cross = np.delete(vb.max(0) - vb.min(0), axis)
+        radius = float(max(0.006, min(cross) / 2))
+        out[bname] = (lo, hi, radius)
+    return out
+
+
+def _simplify_collision(mjcf: str, sides: list[str]) -> str:
     """Replace the robot's mesh collision with primitives for MJX.
 
     MJX's all-pairs convex-mesh collision makes the ~40-mesh hand compile for
-    minutes; this collapses it to ~10 fingertip contact spheres so it compiles
-    in seconds. Each fingertip distal-link mesh becomes a small sphere; every
-    other mesh geom is deleted (link mass comes from the URDF <inertial>, so it's
-    safe) and remaining primitives have collision disabled. Joints also get
-    armature + damping so the stiff arm stays stable without the mesh contact
-    that used to damp it. Behind build_scene(collision="primitive"); the default
-    mesh scene is untouched.
+    minutes; this collapses it to a capsule per fingertip (the contact surface)
+    so it compiles in seconds. Every other mesh geom is deleted (link mass comes
+    from the URDF <inertial>, so it's safe) and remaining primitives have
+    collision disabled. Joints get armature + damping so the stiff arm stays
+    stable without the mesh contact that used to damp it. Behind
+    build_scene(collision="primitive"); the default mesh scene is untouched.
     """
-    ftips = {b for s in sides for b in C.FINGERTIP_BODIES[s]}
+    caps = _fingertip_capsules(sides)
+    ftips = set(caps)
     root = ET.fromstring(mjcf)
     worldbody = root.find("worldbody")
     if worldbody is None:
@@ -119,8 +149,14 @@ def _simplify_collision(mjcf: str, sides: list[str], ftip_radius: float = 0.008)
             joint.set("damping", "1.0")
         for geom in list(body.findall("geom")):
             if is_ftip and geom.get("type") == "mesh":
-                geom.set("type", "sphere"); geom.set("size", f"{ftip_radius}")
-                geom.attrib.pop("mesh", None)
+                lo, hi, rad = caps[name]
+                geom.set("type", "capsule")
+                geom.set("fromto", " ".join(f"{x:.5f}" for x in (*lo, *hi)))
+                geom.set("size", f"{rad:.5f}")
+                # fromto fully specifies placement; pos/quat/mesh must be cleared
+                # or MuJoCo errors ("both pos and fromto defined").
+                for k in ("mesh", "pos", "quat"):
+                    geom.attrib.pop(k, None)
                 geom.set("contype", "1"); geom.set("conaffinity", "1")
                 geom.set("friction", "2.0 0.05 0.002")
             elif geom.get("type") == "mesh":
