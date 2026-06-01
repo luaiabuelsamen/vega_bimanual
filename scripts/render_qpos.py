@@ -25,6 +25,10 @@ def main():
     ap.add_argument("--stride", type=int, default=2)
     ap.add_argument("--w", type=int, default=640)
     ap.add_argument("--h", type=int, default=480)
+    ap.add_argument("--collision", default="mesh",
+                    help="scene to render on: 'mesh' shows the full hand/arm "
+                         "(nicer); 'primitive' shows the bare capsules the "
+                         "policy actually trained on. qpos replays identically.")
     args = ap.parse_args()
 
     r = np.load(args.rollout, allow_pickle=True)
@@ -35,7 +39,7 @@ def main():
     obj_mass = float(r["obj_mass"])
 
     assets.build_scene(sides=sides, obj_type="box", obj_dims=obj_dims,
-                       obj_pos=obj_pos0, obj_mass=obj_mass, collision="primitive")
+                       obj_pos=obj_pos0, obj_mass=obj_mass, collision=args.collision)
     m = mujoco.MjModel.from_xml_path(str(C.GENERATED_SCENE))
     d = mujoco.MjData(m)
     assert qpos.shape[1] == m.nq, f"qpos nq {qpos.shape[1]} != model nq {m.nq}"

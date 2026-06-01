@@ -6,21 +6,19 @@
 > bimanual as the goal.
 
 <p align="center">
-  <img src="media/bim_lift_policy.gif" width="520" alt="Trained bimanual policy lifting a box +21 cm off the table"/>
+  <img src="media/bim_lift_policy.gif" width="520" alt="Trained bimanual policy squeezing and lifting a box off the table"/>
 </p>
 
 *Above: a **trained neural-network policy** driving two Vega f5d6 hands to squeeze
-and lift a box **+21 cm off the table**, held by inter-hand friction. This is the
-one manipulation a **single** f5d6 hand cannot do (its thumb can't oppose the
-fingers closer than ~3.1 cm); the second hand provides the missing object
-opposition. Trained by **behavior cloning** of the open-loop zero-residual
-rollout — four PPO configurations all converged to a `~+4 cm` "don't grip"
-local optimum, because action noise that's large enough for PPO to learn from
-is also large enough to break the marginal friction grip. The kinematic
-reference is feasible in physics, so the optimal residual policy is one that
-tracks the reference exactly; BC finds that policy directly. f5d6's weak
-opposition caps the liftable mass — the squeeze holds a 0.05 kg box but slips
-on 0.12 kg.*
+and lift a 0.05 kg box, held by inter-hand friction. **Verified in physics: the
+box lifts ~+5 cm and stays on the table** (the kinematic reference targets +21 cm,
+but real-physics replay only reaches ~+5 cm — an env-vs-reference divergence in
+the contact, not yet closed). Lifting at all is the one manipulation a **single**
+f5d6 hand cannot do (its thumb can't oppose the fingers closer than ~3.1 cm); the
+second hand provides the missing object opposition. Trained by **behavior
+cloning** of the open-loop zero-residual rollout — the kinematic reference is
+(partially) feasible in physics, so BC clones it directly, sidestepping the
+reward-hacking that PPO falls into on this contact task.*
 
 <p align="center">
   <img src="media/bim_handover.gif" width="480" alt="Bimanual handover: R hand pushes box to midline, both hands then lift it"/>
@@ -35,15 +33,14 @@ side is partial (env-vs-demo replay diverges for chained drive_to demos, a
 separate bug from the RL plateau).*
 
 <p align="center">
-  <img src="media/bim_reorient_policy.gif" width="420" alt="Trained bimanual policy yawing a box ~57°"/>
+  <img src="media/bim_reorient_policy.gif" width="420" alt="Trained bimanual policy yawing a box ~37°"/>
 </p>
 
 *A second **trained-policy** result — **cooperative reorient**: both hands
 contact the box's opposite ±y faces and sweep tangentially in opposite x
-directions; the friction drag yaws the box **+57°** on the table. Nonprehensile
-(no force closure needed), so it doesn't have the grip-margin problem that
-limits the lift. Same BC recipe as the lift policy — clone the open-loop
-zero-residual rollout of a kinematic seg-loop reference.*
+directions; the friction drag yaws the box **+37°** on the table (verified in
+physics). Nonprehensile (no force closure needed), so it doesn't have the
+grip-margin problem that limits the lift. Same BC recipe as the lift policy.*
 
 <p align="center">
   <img src="media/reorient.gif" width="320" alt="Vega f5d6 reorienting a box on a table (nonprehensile)"/>
@@ -95,14 +92,14 @@ manipulation.
 | **Reorient** task (object yaw tracking) | ✅ demo + training |
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
-| **Bimanual squeeze-and-lift** (open-loop physics, +21 cm) | ✅ two hands lift a 0.05 kg box |
-| **Bimanual squeeze-and-lift** (BC-trained policy, +21 cm) | ✅ trained NN actor matches open-loop |
-| **Bimanual cooperative reorient** (open-loop physics couple) | ✅ scripted demo, +111° yaw |
-| **Bimanual cooperative reorient** (BC-trained policy) | ✅ NN policy, +57° yaw |
+| **Bimanual squeeze-and-lift** (open-loop physics) | ✅ two hands lift a 0.05 kg box +5 cm in real physics (the kinematic reference targets +21 cm — the gap is env-replay divergence) |
+| **Bimanual squeeze-and-lift** (BC-trained policy) | ✅ trained NN actor, +5 cm max lift, box stays on table |
+| **Bimanual cooperative reorient** (BC-trained policy) | ✅ NN policy, +37° yaw (verified in physics) |
 | **Bimanual handover** (R-push -> bimanual lift, two-phase) | ✅ scripted demo (10 s composition) |
-| **BC push policy** (single-arm) | ✅ NN policy reproduces 11.6 cm push |
+| **BC push policy** (single-arm) | ✅ NN policy pushes the box −11.5 cm (matches reference target) — verified |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
-| Bimanual *PPO* matching the BC lift | 🚧 4 configurations all collapsed to ~+4 cm; structurally hard for vanilla PPO |
+| **GPU-parallel MJX training on Modal** (`cloud/modal_app.py`) | ✅ ~104k env-steps/s on an A10G (~290× local CPU), ~$0.30 per 100M steps |
+| Bimanual *PPO* matching the BC lift | 🚧 PPO reward-hacks these contact tasks (push → do-nothing, lift → flings the box for transient height); BC of the feasible reference is the honest working path |
 | Human-grasp retargeting (GRAB/TACO → f5d6) | 🚧 scoped (`RETARGETING.md`) |
 | Parallel sim (mujoco_warp) for throughput | 🚧 |
 
