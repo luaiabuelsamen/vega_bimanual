@@ -8,6 +8,8 @@ __pycache__/
 assets_gen/
 runs/
 runs_*.log
+cloud/*.log
+cloud/runs_dl/
 
 # scratch
 *.tmp

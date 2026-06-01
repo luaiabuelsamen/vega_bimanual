@@ -68,6 +68,81 @@ def _compile_to_mjcf(urdf_path: Path) -> str:
     return re.sub(r'file="([^"]+)"', absolutize, mjcf)
 
 
+def _convert_cylinders_to_boxes(mjcf: str) -> str:
+    """Rewrite cylinder geoms as boxes (MJX has no cylinder<->box collision).
+
+    The URDF has two cylinder wrist-collision geoms on {L,R}_arm_l7; approximate
+    each (radius r, half-height h) by a box of half-extents (r, r, h). Applies to
+    both scene builds; the wrist volume barely changes.
+    """
+    root = ET.fromstring(mjcf)
+    n = 0
+    for geom in root.iter("geom"):
+        if geom.get("type") == "cylinder":
+            size = geom.get("size", "").split()
+            if len(size) == 2:                       # (radius, half_height)
+                r, h = size
+                geom.set("type", "box")
+                geom.set("size", f"{r} {r} {h}")
+                n += 1
+    if n:
+        mjcf = ET.tostring(root, encoding="unicode")
+    return mjcf
+
+
+def _simplify_collision(mjcf: str, sides: list[str], ftip_radius: float = 0.008) -> str:
+    """Replace the robot's mesh collision with primitives for MJX.
+
+    MJX's all-pairs convex-mesh collision makes the ~40-mesh hand compile for
+    minutes; this collapses it to ~10 fingertip contact spheres so it compiles
+    in seconds. Each fingertip distal-link mesh becomes a small sphere; every
+    other mesh geom is deleted (link mass comes from the URDF <inertial>, so it's
+    safe) and remaining primitives have collision disabled. Joints also get
+    armature + damping so the stiff arm stays stable without the mesh contact
+    that used to damp it. Behind build_scene(collision="primitive"); the default
+    mesh scene is untouched.
+    """
+    ftips = {b for s in sides for b in C.FINGERTIP_BODIES[s]}
+    root = ET.fromstring(mjcf)
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        return mjcf
+
+    def walk(body):
+        name = body.get("name", "")
+        is_ftip = name in ftips
+        # armature (reflected actuator inertia) + damping keep the stiff arm
+        # stable under exploration once the mesh contact that damped it is gone.
+        for joint in body.findall("joint"):
+            arm = "_arm_" in joint.get("name", "")
+            joint.set("armature", "0.1" if arm else "0.01")
+            joint.set("damping", "1.0")
+        for geom in list(body.findall("geom")):
+            if is_ftip and geom.get("type") == "mesh":
+                geom.set("type", "sphere"); geom.set("size", f"{ftip_radius}")
+                geom.attrib.pop("mesh", None)
+                geom.set("contype", "1"); geom.set("conaffinity", "1")
+                geom.set("friction", "2.0 0.05 0.002")
+            elif geom.get("type") == "mesh":
+                body.remove(geom)            # delete: mesh data bloats MJX compile
+            else:
+                geom.set("contype", "0"); geom.set("conaffinity", "0")
+        for child in body.findall("body"):
+            walk(child)
+
+    for b in worldbody.findall("body"):
+        walk(b)
+
+    # prune now-unreferenced <mesh> assets so MJX never uploads them.
+    asset = root.find("asset")
+    if asset is not None:
+        used = {g.get("mesh") for g in root.iter("geom") if g.get("mesh")}
+        for mesh in list(asset.findall("mesh")):
+            if mesh.get("name") not in used:
+                asset.remove(mesh)
+    return ET.tostring(root, encoding="unicode")
+
+
 def _extract_blocks(mjcf: str) -> tuple[str, str, str]:
     """Pull <asset>, <worldbody>, and <default> inner text from compiled MJCF."""
     def inner(tag: str) -> str:
@@ -127,21 +202,41 @@ def build_scene(
     obj_dims: tuple[float, ...] | None = None,
     obj_mass: float = 0.08,
     obj_friction: str = "2.0 0.05 0.002",
+    collision: str = "mesh",
     write: bool = True,
 ) -> str:
     """Assemble the full scene MJCF. `sides` = which arms get actuators.
 
     obj_type/obj_dims select the manipulable object (see `_object_block`).
     Defaults to the box (obj_dims falls back to a cube of `obj_size`).
+
+    collision:
+      "mesh"      -> keep the URDF's full mesh collision (default; what the
+                     existing CPU demos / BC checkpoints were tuned on).
+      "primitive" -> fingertip spheres + collision disabled elsewhere, so the
+                     scene is MJX-compatible and compiles in seconds
+                     (see `_simplify_collision`).
     """
     sides = sides or ["R"]
     if obj_dims is None:
         obj_dims = (obj_size, obj_size, obj_size)
-    asset, worldbody, default = _extract_blocks(_compile_to_mjcf(C.VEGA_F5D6_URDF))
+    mjcf = _convert_cylinders_to_boxes(_compile_to_mjcf(C.VEGA_F5D6_URDF))
+    if collision == "primitive":
+        mjcf = _simplify_collision(mjcf, sides)
+    asset, worldbody, default = _extract_blocks(mjcf)
+
+    # Primitive (MJX) scene uses CG + pyramidal cone: Newton's inner iterations
+    # nest badly under jax.lax.scan and blow up rollout compile time. Mesh scene
+    # keeps the more accurate Newton + elliptic.
+    if collision == "primitive":
+        opt = (f'<option timestep="{C.SIM_DT}" integrator="implicitfast" '
+               f'cone="pyramidal" solver="CG" iterations="10" ls_iterations="8"/>')
+    else:
+        opt = f'<option timestep="{C.SIM_DT}" integrator="implicitfast" cone="elliptic"/>'
 
     scene = f"""<mujoco model="vega_f5d6_tracking">
   <compiler angle="radian" autolimits="true"/>
-  <option timestep="{C.SIM_DT}" integrator="implicitfast" cone="elliptic"/>
+  {opt}
 
   <default>
 {_indent(default, 4)}
