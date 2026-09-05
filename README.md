@@ -121,10 +121,10 @@ PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_bo
 # bimanual handover (R pushes to midline, then both lift)
 PYTHONPATH=. python scripts/make_demo.py --task bim_handover --out demos/bim_handover_box.npz
 
-# bimanual cooperative reorient (couple yaws the box ~111°)
+# bimanual cooperative reorient (kinematic reference; physics-verified yaw is +37 deg)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient --out demos/bim_reorient_box.npz
 
-# kinematic-seg version of bimanual reorient (env replay reproduces a +57° yaw)
+# kinematic-seg version of bimanual reorient (reference target; the BC policy reaches +37 deg in physics)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient_k --out demos/bim_reorient_k_box.npz
 # BC train a policy on it
 PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_reorient_k_box.npz --sides R,L \
@@ -145,7 +145,8 @@ PYTHONPATH=. python scripts/train.py --ref demos/bim_lift_box.npz --sides R,L \
     --obj-pos 0.55,0.0,0.80 --total-steps 800000
 
 # behavior-clone a residual policy from the (already-feasible) zero-residual
-# rollout — yields a trained NN policy that lifts the box +21 cm
+# rollout. +21 cm is the kinematic reference target; the policy reaches ~+5 cm
+# in real physics (see the results table above)
 PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_lift_box.npz --sides R,L \
     --obj-type box --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \
     --obj-pos 0.55,0.0,0.80 --epochs 400 --out runs/bim_lift_bc/ckpt.pt
