@@ -1,19 +1,23 @@
 # vega_bimanual — RL manipulation *tracking* on the Dexmate Vega (MuJoCo)
 
-> **Work in progress.** Reimplementing [DexTrack](https://github.com/Meowuu7/DexTrack)-style
-> reinforcement-learning manipulation *tracking* on the bimanual
-> [Dexmate Vega](https://www.dexmate.ai/) humanoid, in MuJoCo — single-arm first,
-> bimanual as the goal.
+> **Archived (October 2026).** No longer developed. An attempt to bring
+> [DexTrack](https://github.com/Meowuu7/DexTrack)-style reinforcement-learning
+> manipulation *tracking* (Liu et al.; the method is theirs) to the bimanual
+> [Dexmate Vega](https://www.dexmate.ai/) humanoid in MuJoCo. The bimanual policy
+> numbers below come from one deterministic physics rollout per policy, recorded in
+> [`results/verified_rollouts.json`](results/verified_rollouts.json) by
+> `scripts/verify_policies.py`. Other figures in this README come from runs whose
+> outputs were not kept.
 
 <p align="center">
   <img src="media/bim_lift_policy.gif" width="520" alt="Trained bimanual policy squeezing and lifting a box off the table"/>
 </p>
 
 *Above: a **trained neural-network policy** driving two Vega f5d6 hands to squeeze
-and lift a 0.05 kg box, held by inter-hand friction. **Verified in physics: the
-box lifts ~+5 cm and stays on the table** (the kinematic reference targets +21 cm,
-but real-physics replay only reaches ~+5 cm — an env-vs-reference divergence in
-the contact, not yet closed). Lifting at all is the one manipulation a **single**
+a 0.05 kg box between them and lift it. **In physics the box peaks at +5.2 cm and
+ends at +1.0 cm**, turning up to 122° in yaw on the way, against a kinematic
+reference that lifts it +18 cm: the policy does not reproduce the reference
+(env-vs-reference divergence in the contact, never closed). Lifting at all is the one manipulation a **single**
 f5d6 hand cannot do (its thumb can't oppose the fingers closer than ~3.1 cm); the
 second hand provides the missing object opposition. Trained by **behavior
 cloning** of the open-loop zero-residual rollout — the kinematic reference is
@@ -33,13 +37,13 @@ side is partial (env-vs-demo replay diverges for chained drive_to demos, a
 separate bug from the RL plateau).*
 
 <p align="center">
-  <img src="media/bim_reorient_policy.gif" width="420" alt="Trained bimanual policy yawing a box ~37°"/>
+  <img src="media/bim_reorient_policy.gif" width="420" alt="Trained bimanual policy yawing a box ~32°"/>
 </p>
 
 *A second **trained-policy** result — **cooperative reorient**: both hands
 contact the box's opposite ±y faces and sweep tangentially in opposite x
-directions; the friction drag yaws the box **+37°** on the table (verified in
-physics). Nonprehensile (no force closure needed), so it doesn't have the
+directions; the friction drag yaws the box **+32°** in physics, against a
++60° reference. Nonprehensile (no force closure needed), so it doesn't have the
 grip-margin problem that limits the lift. Same BC recipe as the lift policy.*
 
 <p align="center">
@@ -92,9 +96,8 @@ manipulation.
 | **Reorient** task (object yaw tracking) | ✅ demo + training |
 | 6-DoF IK, object types, headless GIF render | ✅ |
 | Bimanual env (36-DoF action) | ✅ constructs & steps |
-| **Bimanual squeeze-and-lift** (open-loop physics) | ✅ two hands lift a 0.05 kg box +5 cm in real physics (the kinematic reference targets +21 cm — the gap is env-replay divergence) |
-| **Bimanual squeeze-and-lift** (BC-trained policy) | ✅ trained NN actor, +5 cm max lift, box stays on table |
-| **Bimanual cooperative reorient** (BC-trained policy) | ✅ NN policy, +37° yaw (verified in physics) |
+| **Bimanual squeeze-and-lift** (BC-trained policy) | ⚠️ peak lift +5.2 cm, final +1.0 cm, against a +18 cm reference |
+| **Bimanual cooperative reorient** (BC-trained policy) | ⚠️ +32° yaw against a +60° reference |
 | **Bimanual handover** (R-push -> bimanual lift, two-phase) | ✅ scripted demo (10 s composition) |
 | **BC push policy** (single-arm) | ✅ NN policy pushes the box −11.5 cm (matches reference target) — verified |
 | Multi-core training (`ProcessVectorEnv`, ~2.8× on 8 cores) | ✅ |
@@ -115,16 +118,21 @@ naturally to two-arm cooperative manipulation.
 ## Run
 
 ```bash
+# re-measure the bimanual policies in physics -> results/verified_rollouts.json
+PYTHONPATH=. python scripts/verify_policies.py
+```
+
+```bash
 # generate a reference demo
 PYTHONPATH=. python scripts/make_demo.py --task reorient --out demos/reorient_box.npz
 
 # bimanual handover (R pushes to midline, then both lift)
 PYTHONPATH=. python scripts/make_demo.py --task bim_handover --out demos/bim_handover_box.npz
 
-# bimanual cooperative reorient (kinematic reference; physics-verified yaw is +37 deg)
+# bimanual cooperative reorient (kinematic reference only; not measured in physics)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient --out demos/bim_reorient_box.npz
 
-# kinematic-seg version of bimanual reorient (reference target; the BC policy reaches +37 deg in physics)
+# kinematic-seg version of bimanual reorient (reference: +60° yaw; the BC policy reaches +32°)
 PYTHONPATH=. python scripts/make_demo.py --task bim_reorient_k --out demos/bim_reorient_k_box.npz
 # BC train a policy on it
 PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_reorient_k_box.npz --sides R,L \
@@ -145,8 +153,7 @@ PYTHONPATH=. python scripts/train.py --ref demos/bim_lift_box.npz --sides R,L \
     --obj-pos 0.55,0.0,0.80 --total-steps 800000
 
 # behavior-clone a residual policy from the (already-feasible) zero-residual
-# rollout. +21 cm is the kinematic reference target; the policy reaches ~+5 cm
-# in real physics (see the results table above)
+# rollout (the policy peaks at +5.2 cm against the reference's +18 cm)
 PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_lift_box.npz --sides R,L \
     --obj-type box --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \
     --obj-pos 0.55,0.0,0.80 --epochs 400 --out runs/bim_lift_bc/ckpt.pt

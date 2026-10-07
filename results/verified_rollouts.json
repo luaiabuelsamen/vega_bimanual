@@ -1,0 +1,52 @@
+{
+ "bim_lift_bc": {
+  "ref": "demos/bim_lift_box.npz",
+  "ckpt": "runs/bim_lift_bc/ckpt.pt",
+  "object": {
+   "obj_mass": 0.05,
+   "obj_dims": [
+    0.04,
+    0.045,
+    0.07
+   ],
+   "obj_pos": [
+    0.55,
+    0.0,
+    0.8
+   ]
+  },
+  "steps": 169,
+  "rollouts": 1,
+  "physics_max_lift_cm": 5.15,
+  "physics_final_lift_cm": 0.99,
+  "physics_final_yaw_deg": -59.2,
+  "physics_max_abs_yaw_deg": 121.9,
+  "reference_max_lift_cm": 18.0,
+  "reference_final_yaw_deg": 0.0
+ },
+ "bim_reorient_bc": {
+  "ref": "demos/bim_reorient_k_box.npz",
+  "ckpt": "runs/bim_reorient_bc/ckpt.pt",
+  "object": {
+   "obj_mass": 0.1,
+   "obj_dims": [
+    0.045,
+    0.045,
+    0.06
+   ],
+   "obj_pos": [
+    0.55,
+    0.0,
+    0.8
+   ]
+  },
+  "steps": 272,
+  "rollouts": 1,
+  "physics_max_lift_cm": 3.95,
+  "physics_final_lift_cm": 3.79,
+  "physics_final_yaw_deg": 31.8,
+  "physics_max_abs_yaw_deg": 31.8,
+  "reference_max_lift_cm": 0.0,
+  "reference_final_yaw_deg": 60.0
+ }
+}

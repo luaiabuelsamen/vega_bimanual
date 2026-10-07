@@ -1,11 +1,12 @@
 """Behavior-cloning to a zero-residual policy.
 
 The bimanual squeeze-lift's open-loop (zero-residual) trajectory already lifts
-the box +21 cm in physics. Vanilla PPO can't preserve this — even tiny action
+the box in physics. Vanilla PPO can't preserve this — even tiny action
 noise compounds over 170 steps and breaks the friction grip (we verified 4
 configurations). BC bypasses PPO: collect the open-loop rollout (obs, action=0)
 and train the actor's mean network via MSE to output zero for those obs.
-The resulting deterministic policy reproduces the +21 cm lift.
+The resulting deterministic policy peaks at +5.2 cm against the reference's
++18 cm (results/verified_rollouts.json).
 
     PYTHONPATH=. python scripts/bc_zero.py --ref demos/bim_lift_box.npz \
         --sides R,L --obj-mass 0.05 --obj-dims 0.04,0.045,0.07 \

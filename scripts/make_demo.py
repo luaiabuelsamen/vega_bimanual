@@ -547,7 +547,7 @@ class BimanualDemoGen:
         # --- phase 2: bimanual squeeze-and-lift around the now-centred box ---
         # Kinematic seg-loop pattern (like generate_squeeze_lift): records the
         # ideal interpolated pose as both qpos AND ctrl so the env's ctrl-replay
-        # reproduces the +21 cm lift behaviour. Starts at the physical obj_now.
+        # reproduces the squeeze-lift behaviour. Starts at the physical obj_now.
         obj_now = self.obj_pos()
         objq_now = self.d.qpos[self.obj_q + 3:self.obj_q + 7].copy()
         cR = obj_now + np.array([0.0, -hy, 0.0])
@@ -732,7 +732,7 @@ class BimanualDemoGen:
         the env then realizes it in physics via the residual policy. Both
         hand_qpos AND hand_ctrl record the same ideal interpolated pose — the
         env's ctrl-replay mode then uses those ideal poses as actuator targets
-        (the historically working open-loop +21cm came from exactly this: the
+        (the historically working open-loop lift came from exactly this: the
         OLD env's qpos-as-ctrl replay was effectively applying these ideal
         poses as ctrl; making it explicit via hand_ctrl preserves that behavior
         while also fixing contact-rich tracks like bim_reorient)."""
@@ -804,7 +804,7 @@ POLE = dict(obj_type="cylinder", obj_dims=(0.016, 0.07), obj_pos=(0.55, -0.15, 0
 # symmetrically, sized so the two palms have a face to press (8x9x14 cm). Mass is
 # 0.05kg (a light package): at the heavier 0.12kg the inter-hand friction squeeze
 # can't hold the box (open-loop ref playback lifts it only ~6cm then drops it),
-# whereas at 0.05kg the squeeze physically lifts and holds it (+21cm open-loop) —
+# whereas at 0.05kg the squeeze physically lifts it (open-loop) —
 # i.e. the tracking target is physically realizable, which it must be for the RL
 # tracker to have any chance. f5d6's weak opposition caps the liftable mass.
 BIM_BOX = dict(obj_type="box", obj_dims=(0.04, 0.045, 0.07), obj_pos=(0.55, 0.0, 0.80),
